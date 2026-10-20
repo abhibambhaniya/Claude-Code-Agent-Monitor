@@ -70,7 +70,7 @@ function countEventsToday(db, sources, providers, toLocal, toUTC) {
   return db
     .prepare(
       `SELECT COUNT(*) as count FROM events
-       WHERE created_at >= datetime('now', ?, 'start of day', ?)
+       WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?, 'start of day', ?)
          AND session_id IN (${scope.sql})`
     )
     .get(toLocal, toUTC, ...scope.params);
