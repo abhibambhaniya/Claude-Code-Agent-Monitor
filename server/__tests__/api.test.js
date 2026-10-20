@@ -715,6 +715,29 @@ describe("Stats API", () => {
           assert.equal(await eventsToday(query), baseline + 1);
         });
       }
+
+      it(`falls back to UTC for an out-of-range tz_offset (${label})`, async () => {
+        assert.equal(
+          await eventsToday(`tz_offset=999999999999${extra}`),
+          await eventsToday(`tz_offset=0${extra}`)
+        );
+      });
+
+      for (const [transition, dayStart, offsetMin] of [
+        ["spring forward", "2026-03-08T08:00:00.000Z", 420],
+        ["fall back", "2026-11-01T07:00:00.000Z", 480],
+      ]) {
+        it(`uses day_start on a ${transition} day in Los Angeles (${label})`, async () => {
+          const query = `tz_offset=${offsetMin}&day_start=${encodeURIComponent(dayStart)}${extra}`;
+          const baseline = await eventsToday(query);
+
+          insertAt(shift(dayStart, -1));
+          assert.equal(await eventsToday(query), baseline);
+
+          insertAt(shift(dayStart, 1));
+          assert.equal(await eventsToday(query), baseline + 1);
+        });
+      }
     }
   });
 });
