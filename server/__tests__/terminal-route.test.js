@@ -54,6 +54,19 @@ describe("terminal record ingestion", () => {
     });
   });
 
+  it("stamps Ghostty records with the hook time, ignoring a client-sent one", async () => {
+    const before = Date.now();
+    await post("/api/hooks/event", {
+      hook_type: "SessionStart",
+      data: { session_id: "term-g", cwd: "/tmp", source: "startup" },
+      terminal: { pid: 4243, ghostty: true, seen_at: "2000-01-01T00:00:00Z" },
+    });
+    const stored = JSON.parse(stmts.getSession.get("term-g").terminal);
+    assert.equal(stored.pid, 4243);
+    assert.equal(stored.ghostty, true);
+    assert.ok(Date.parse(stored.seen_at) >= before - 1000);
+  });
+
   it("ignores a malformed record", async () => {
     await post("/api/hooks/event", {
       hook_type: "SessionStart",

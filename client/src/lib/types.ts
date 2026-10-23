@@ -700,7 +700,7 @@ export interface Session {
    * the server may grow new values; normalize via {@link sessionAwaitingReason}
    * before rendering. Null/absent when the session is not waiting. */
   awaiting_reason?: string | null;
-  /** JSON `{pid, tmux_pane?, tmux_socket?, ghostty?}` from local hooks: where the CLI
+  /** JSON `{pid, tmux_pane?, tmux_socket?, ghostty?, seen_at?}` from local hooks: where the CLI
    * runs. Read via {@link sessionTerminal}; null for remote/imported sessions. */
   terminal?: string | null;
   /** Machine this session was collected from. `"local"` (the default) is this

@@ -21,7 +21,7 @@ const {
 const router = Router();
 router.use(sameOriginGuard);
 
-/** Resolve the session and its terminal record, or answer with an error and return null. */
+/** Resolve the session and its terminal record, or answer with an error. */
 function loadTerminal(req, res) {
   const session = stmts.getSession.get(req.params.sessionId);
   if (!session) {
@@ -39,7 +39,7 @@ function loadTerminal(req, res) {
     });
     return null;
   }
-  return { session, terminal };
+  return terminal;
 }
 
 function sendError(res, err) {
@@ -52,22 +52,20 @@ function sendError(res, err) {
 }
 
 router.post("/:sessionId/focus", async (req, res) => {
-  const found = loadTerminal(req, res);
-  if (!found) return;
+  const terminal = loadTerminal(req, res);
+  if (!terminal) return;
   try {
-    res.json({ ok: true, ...(await focusTerminal(found.terminal)) });
+    res.json({ ok: true, ...(await focusTerminal(terminal)) });
   } catch (err) {
     sendError(res, err);
   }
 });
 
 router.post("/:sessionId/input", async (req, res) => {
-  const found = loadTerminal(req, res);
-  if (!found) return;
+  const terminal = loadTerminal(req, res);
+  if (!terminal) return;
   try {
-    // updated_at moves with every hook: the CLI pid was alive at that time.
-    const { terminal, session } = found;
-    res.json({ ok: true, ...(await sendInput(terminal, req.body?.text, session.updated_at)) });
+    res.json({ ok: true, ...(await sendInput(terminal, req.body?.text)) });
   } catch (err) {
     sendError(res, err);
   }

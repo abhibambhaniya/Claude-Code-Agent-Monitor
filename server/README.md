@@ -790,7 +790,7 @@ The Agent Config page also includes a **Codex configuration workspace**. It disc
 
 ### Terminal (`/api/terminal`)
 
-Focus or reply to a live local session's terminal (`routes/terminal.js` over `lib/terminal-control.js`). Uses the hook-reported `sessions.terminal` record (`{pid, tmux_pane?, tmux_socket?, ghostty?}`, stored only for loopback hooks) and the Run Agent loopback-Origin guard. All commands run via `execFile`, never a shell.
+Focus or reply to a live local session's terminal (`routes/terminal.js` over `lib/terminal-control.js`). Uses the hook-reported `sessions.terminal` record (`{pid, tmux_pane?, tmux_socket?, ghostty?, seen_at?}`, stored only for loopback hooks) and the Run Agent loopback-Origin guard. All commands run via `execFile`, never a shell.
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |

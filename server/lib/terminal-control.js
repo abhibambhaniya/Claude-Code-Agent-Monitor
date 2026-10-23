@@ -69,11 +69,17 @@ function sanitizeTerminal(raw) {
   return Object.keys(out).length ? out : null;
 }
 
-/** Parse the `sessions.terminal` column; null when absent or malformed. */
+/**
+ * Parse the `sessions.terminal` column; null when absent or malformed. Keeps
+ * `seen_at`, which only the server writes (hooks cannot supply it).
+ */
 function parseTerminal(json) {
   if (!json) return null;
   try {
-    return sanitizeTerminal(JSON.parse(json));
+    const raw = JSON.parse(json);
+    const term = sanitizeTerminal(raw);
+    if (term?.ghostty && typeof raw.seen_at === "string") term.seen_at = raw.seen_at;
+    return term;
   } catch {
     return null;
   }
@@ -379,11 +385,11 @@ function etimeMs(etime) {
 
 /**
  * Throw unless `pid` is still the session's CLI and owns `tty`'s foreground.
- * It must have started no later than the session's last hook (`lastSeen`),
- * or the pid was reused; it must still sit on `tty` and lead the foreground
+ * It must have started no later than the last hook that reported it
+ * (`seenAt`), or the pid was reused; it must still sit on `tty` and lead the foreground
  * process group, and that group must not be a shell (the CLI exited).
  */
-async function assertCliForeground(pid, tty, lastSeen) {
+async function assertCliForeground(pid, tty, seenAt) {
   const line = await run("ps", ["-o", "pgid=,tpgid=,tty=,etime=", "-p", String(pid)]).catch(
     () => ""
   );
@@ -395,9 +401,11 @@ async function assertCliForeground(pid, tty, lastSeen) {
       "the session's CLI is no longer running in that terminal"
     );
   }
-  // ps etime has 1 s resolution; allow 2 s of slack against the hook clock.
+  // etime truncates to whole seconds, so `started` can run up to 1 s late.
+  // ponytail: a pid reused within 1 s of the CLI's last hook, on the same tty
+  // and in its foreground, still passes; an OS start-time API would close it.
   const started = Date.now() - etimeMs(etime);
-  if (`/dev/${ttyName}` !== tty || !(started <= Date.parse(lastSeen) + 2000)) {
+  if (`/dev/${ttyName}` !== tty || !(started <= Date.parse(seenAt) + 1000)) {
     throw new TerminalError("EPANEMISMATCH", "that process no longer belongs to this session");
   }
   if (pgid !== tpgid) {
@@ -412,16 +420,15 @@ async function assertCliForeground(pid, tty, lastSeen) {
  * Outside tmux: paste `text` into the Ghostty surface on the CLI's tty and
  * press Enter. The CLI's ownership of that tty is checked before the surface
  * is looked up, again right before the paste, and again before Enter.
- * `lastSeen` is the session's last hook time (see assertCliForeground).
  */
-async function sendGhosttyInput(term, text, lastSeen) {
+async function sendGhosttyInput(term, text) {
   const tty = process.platform === "darwin" && term?.pid ? await ttyOf(term.pid) : null;
   const bundle = tty ? await hostBundle(term.pid) : null;
   if (!bundle || path.basename(bundle, ".app") !== "Ghostty") {
     throw new TerminalError("ENOTMUX", "session is not running inside tmux or Ghostty");
   }
   checkInput(text);
-  const ensure = () => assertCliForeground(term.pid, tty, lastSeen);
+  const ensure = () => assertCliForeground(term.pid, tty, term.seen_at);
   await ensure();
   const id = await findGhosttySurface(tty, "find");
   if (!id) {
@@ -441,13 +448,10 @@ async function sendGhosttyInput(term, text, lastSeen) {
  * Type `text` into the session's tmux pane and press Enter. Refuses unless the
  * pane still runs the session's CLI: the foreground command must not be a
  * shell, and the recorded CLI pid (when known) must be a descendant of the
- * pane's process. Outside tmux, Ghostty sessions go through sendGhosttyInput,
- * which needs `lastSeen`, the session's last hook time.
+ * pane's process. Outside tmux, Ghostty sessions go through sendGhosttyInput.
  */
-function sendInput(term, text, lastSeen) {
-  return queued(() =>
-    term?.tmux_pane ? sendTmuxInput(term, text) : sendGhosttyInput(term, text, lastSeen)
-  );
+function sendInput(term, text) {
+  return queued(() => (term?.tmux_pane ? sendTmuxInput(term, text) : sendGhosttyInput(term, text)));
 }
 
 async function sendTmuxInput(term, text) {

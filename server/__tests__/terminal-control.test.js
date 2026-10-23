@@ -41,6 +41,18 @@ describe("sanitizeTerminal", () => {
     assert.equal(parseTerminal("{not json"), null);
   });
 
+  it("keeps seen_at only from the stored record, never from a hook", () => {
+    assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: true, seen_at: "2026-01-01T00:00:00Z" }), {
+      pid: 7,
+      ghostty: true,
+    });
+    assert.deepEqual(parseTerminal('{"pid":7,"ghostty":true,"seen_at":"2026-01-01T00:00:00Z"}'), {
+      pid: 7,
+      ghostty: true,
+      seen_at: "2026-01-01T00:00:00Z",
+    });
+  });
+
   it("keeps the Ghostty flag only for a pid outside tmux", () => {
     assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: true }), { pid: 7, ghostty: true });
     assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: "yes" }), { pid: 7 });
@@ -244,7 +256,8 @@ describe("focusTerminal and sendInput in Ghostty", () => {
   });
 
   const now = () => new Date().toISOString();
-  const reply = (text, lastSeen = now()) => terminalControl.sendInput({ pid: 100 }, text, lastSeen);
+  const reply = (text, seenAt = now()) =>
+    terminalControl.sendInput({ pid: 100, ghostty: true, seen_at: seenAt }, text);
 
   it("types a reply into the CLI's surface without focusing it", async () => {
     assert.deepEqual(await reply("yes\ngo"), { sent: true });
@@ -263,12 +276,13 @@ describe("focusTerminal and sendInput in Ghostty", () => {
     ghostty.foreground = 100;
     // The pid started 5 s ago, after the session's last hook a minute ago:
     // another process reused it.
+    const minuteAgo = new Date(Date.now() - 60_000).toISOString();
     ghostty.etime = "00:05";
-    await assert.rejects(reply("hi", new Date(Date.now() - 60_000).toISOString()), {
-      code: "EPANEMISMATCH",
-    });
+    await assert.rejects(reply("hi", minuteAgo), { code: "EPANEMISMATCH" });
+    ghostty.etime = "00:58"; // 2 s after that hook: past the 1 s etime rounding
+    await assert.rejects(reply("hi", minuteAgo), { code: "EPANEMISMATCH" });
     ghostty.etime = "10:00";
-    await assert.rejects(reply("hi", null), { code: "EPANEMISMATCH" });
+    await assert.rejects(reply("hi", null), { code: "EPANEMISMATCH" }); // no hook stamp
     ghostty.seesMarker = false;
     await assert.rejects(reply("hi"), { code: "ENOSURFACE" });
     assert.deepEqual(ghostty.typed, []);
