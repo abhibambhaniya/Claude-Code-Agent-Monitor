@@ -126,8 +126,9 @@ const GHOSTTY_LIST = `on run argv
   end repeat
   return out
 end run`;
-// Waits up to ~1 s for the title to reach Ghostty, focuses that surface and
-// returns its id ("" when it never showed up).
+// Waits up to ~1 s for the title to reach Ghostty and focuses that surface
+// (activating first, or macOS may raise the last-active window over it).
+// Returns its id, "!"-prefixed when focus failed, or "" when it never showed.
 const GHOSTTY_FOCUS = `on run argv
   set marker to item 1 of argv
   tell application "Ghostty"
@@ -136,8 +137,13 @@ const GHOSTTY_FOCUS = `on run argv
       set hits to (every terminal whose name is marker)
       if (count of hits) > 0 then
         set t to item 1 of hits
-        focus t
-        return id of t
+        set tid to id of t
+        try
+          focus t
+        on error
+          return "!" & tid
+        end try
+        return tid
       end if
       delay 0.05
     end repeat
@@ -155,12 +161,16 @@ function parseGhosttyTerminals(out) {
   return titles;
 }
 
-/** A title safe to embed in OSC 2: no C0/C1 controls (ESC/BEL end the sequence). */
+/**
+ * A title safe to embed in OSC 2: no C0/C1 controls (ESC/BEL end the
+ * sequence), under 256 UTF-8 bytes (Ghostty ignores longer titles).
+ */
 function sanitizeTitle(title) {
   // eslint-disable-next-line no-control-regex
-  return String(title ?? "")
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
-    .slice(0, 256);
+  const chars = Array.from(String(title ?? "").replace(/[\x00-\x1f\x7f-\x9f]/g, ""));
+  let bytes = Buffer.byteLength(chars.join(""));
+  while (bytes > 255) bytes -= Buffer.byteLength(chars.pop());
+  return chars.join("");
 }
 
 function writeTitle(tty, title) {
@@ -175,23 +185,41 @@ function writeTitle(tty, title) {
   }
 }
 
+// Marker transactions run one at a time: an overlapping one on the same tty
+// would snapshot the other's marker as the title to restore.
+// ponytail: one global queue; key it by tty if requests ever pile up.
+let ghosttyQueue = Promise.resolve();
+const MARKER_RE = /^ccam-[0-9a-f-]{36}$/;
+// Title each surface was last restored to. Ghostty applies OSC 2 a moment
+// after the write, so a back-to-back snapshot can still show the old marker.
+const restoredTitles = new Map();
+
 /**
  * Focus the Ghostty surface attached to `tty`. True when it was found and
  * focused; throws when Ghostty or the tty cannot be reached.
  */
-async function focusGhosttySurface(tty) {
-  const marker = `ccam-${crypto.randomUUID()}`;
-  const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
-  writeTitle(tty, marker);
-  let id = "";
-  try {
-    id = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
-  } finally {
-    // ponytail: marker never seen -> the old title is unknown, so the title is
-    // cleared; the CLI or shell sets a fresh one on its next redraw/prompt.
-    writeTitle(tty, titles.get(id) ?? "");
-  }
-  return Boolean(id);
+function focusGhosttySurface(tty) {
+  const turn = ghosttyQueue.then(async () => {
+    const marker = `ccam-${crypto.randomUUID()}`;
+    const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
+    writeTitle(tty, marker);
+    let found = "";
+    try {
+      found = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
+    } finally {
+      // ponytail: marker never seen -> the surface and its old title are
+      // unknown, so the title is cleared (better than leaving the marker); the
+      // CLI or shell sets a fresh one on its next redraw/prompt.
+      const id = found.replace(/^!/, "");
+      let title = titles.get(id) ?? "";
+      if (MARKER_RE.test(title)) title = restoredTitles.get(id) ?? "";
+      if (id) restoredTitles.set(id, title);
+      writeTitle(tty, title);
+    }
+    return Boolean(found) && !found.startsWith("!");
+  });
+  ghosttyQueue = turn.catch(() => {});
+  return turn;
 }
 
 /** `/dev/ttysNNN` the process `pid` writes to, or null (no tty / gone). */

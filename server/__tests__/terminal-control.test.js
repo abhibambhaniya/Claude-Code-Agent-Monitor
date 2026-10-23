@@ -5,9 +5,10 @@
  * @author Son Nguyen <hoangson091104@gmail.com>
  */
 
-const { describe, it, before, after } = require("node:test");
+const { describe, it, before, after, beforeEach, mock } = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const childProcess = require("node:child_process");
+const { execFileSync } = childProcess;
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -55,7 +56,101 @@ describe("Ghostty exact-tab helpers", () => {
   it("strips the controls that would end or inject an OSC sequence", () => {
     assert.equal(sanitizeTitle("a\x1b]2;evil\x07b\x9cc\n"), "a]2;evilbc");
     assert.equal(sanitizeTitle(undefined), "");
-    assert.equal(sanitizeTitle("x".repeat(300)).length, 256);
+  });
+
+  it("keeps titles under Ghostty's 256-byte limit on a code point boundary", () => {
+    assert.equal(sanitizeTitle("x".repeat(300)).length, 255);
+    const cut = sanitizeTitle("✳".repeat(100)); // 3 bytes each
+    assert.equal(cut, "✳".repeat(85));
+  });
+});
+
+describe("focusTerminal in Ghostty", () => {
+  // A fake Ghostty: one terminal on /dev/ttys009 hosting pid 100, whose title
+  // follows the OSC 2 sequences written to that tty.
+  let ghostty;
+  let terminalControl;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+
+  function fakeExecFile(cmd, args, _opts, cb) {
+    const reply = (out) => setImmediate(() => cb(null, out));
+    const joined = args.join(" ");
+    if (cmd === "ps" && joined === "-o ppid=,comm= -p 100") return reply("50 claude");
+    if (cmd === "ps" && joined === "-o ppid=,comm= -p 50") {
+      return reply("1 /Applications/Ghostty.app/Contents/MacOS/ghostty");
+    }
+    if (cmd === "ps" && joined === "-o tty= -p 100") return reply("ttys009");
+    if (cmd === "open") {
+      ghostty.opened.push(args[1]);
+      return reply("");
+    }
+    if (cmd === "osascript" && args.length === 2) return reply(`T-1\t${ghostty.title}\n`);
+    if (cmd === "osascript") {
+      // Answer only once the marker is the live title, a little later, so
+      // overlapping requests really interleave without the queue.
+      return setTimeout(() => {
+        const hit = ghostty.seesMarker && ghostty.title === args[2];
+        if (hit) ghostty.focused++;
+        cb(null, hit ? "T-1" : "");
+      }, 20);
+    }
+    return setImmediate(() => cb(new Error(`unexpected ${cmd} ${joined}`)));
+  }
+
+  before(() => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    mock.method(childProcess, "execFile", fakeExecFile);
+    mock.method(fs, "openSync", () => 99);
+    mock.method(fs, "closeSync", () => {});
+    // Like Ghostty, apply the title a moment after the write.
+    mock.method(fs, "writeSync", (_fd, data) => {
+      const title = /^\x1b\]2;(.*)\x07$/.exec(data)[1];
+      setTimeout(() => (ghostty.title = title), 5);
+    });
+    // Reload so the module picks up the mocked execFile it destructures.
+    delete require.cache[require.resolve("../lib/terminal-control")];
+    terminalControl = require("../lib/terminal-control");
+  });
+
+  after(() => {
+    mock.restoreAll();
+    Object.defineProperty(process, "platform", platform);
+    delete require.cache[require.resolve("../lib/terminal-control")];
+  });
+
+  beforeEach(() => {
+    ghostty = { title: "✳ my session", seesMarker: true, focused: 0, opened: [] };
+  });
+
+  it("focuses the marked surface and restores its title", async () => {
+    const res = await terminalControl.focusTerminal({ pid: 100 });
+    assert.deepEqual(res, { tmux: false, attached: true, app: "Ghostty", exact: true });
+    assert.equal(ghostty.focused, 1);
+    assert.deepEqual(ghostty.opened, []);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ghostty.title, "✳ my session");
+  });
+
+  it("serializes overlapping requests so neither restores the other's marker", async () => {
+    const both = await Promise.all([
+      terminalControl.focusTerminal({ pid: 100 }),
+      terminalControl.focusTerminal({ pid: 100 }),
+    ]);
+    assert.deepEqual(
+      both.map((r) => r.exact),
+      [true, true]
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ghostty.title, "✳ my session");
+  });
+
+  it("falls back to raising the app when the marker never shows up", async () => {
+    ghostty.seesMarker = false;
+    const res = await terminalControl.focusTerminal({ pid: 100 });
+    assert.equal(res.exact, false);
+    assert.deepEqual(ghostty.opened, ["/Applications/Ghostty.app"]);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ghostty.title, "");
   });
 });
 
