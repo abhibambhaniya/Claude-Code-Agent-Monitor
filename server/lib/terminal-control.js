@@ -5,7 +5,7 @@
  * from `$TMUX`) and the CLI's pid; this module validates that record, focuses
  * the session (tmux select/switch-client, then raises the terminal app on
  * macOS — in Ghostty, the exact window/tab/split), and types a reply into a
- * tmux pane. Every external command runs via execFile with an argument array
+ * tmux pane or, outside tmux, a Ghostty surface. Every external command runs via execFile with an argument array
  * — never through a shell.
  * @author Son Nguyen <hoangson091104@gmail.com>
  */
@@ -48,7 +48,7 @@ class TerminalError extends Error {
 /**
  * Validate the terminal record a hook handler sent. Untrusted JSON, so every
  * field is shape-checked; anything off is dropped.
- * @returns {{tmux_pane?: string, tmux_socket?: string, pid?: number} | null}
+ * @returns {{tmux_pane?: string, tmux_socket?: string, pid?: number, ghostty?: true} | null}
  */
 function sanitizeTerminal(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -65,6 +65,7 @@ function sanitizeTerminal(raw) {
     out.tmux_socket = raw.tmux_socket;
   }
   if (Number.isInteger(raw.pid) && raw.pid > 1 && raw.pid < 2 ** 31) out.pid = raw.pid;
+  if (raw.ghostty === true && out.pid && !out.tmux_pane) out.ghostty = true;
   return Object.keys(out).length ? out : null;
 }
 
@@ -128,29 +129,45 @@ const GHOSTTY_LIST = `on run argv
   end repeat
   return out
 end run`;
-// Waits up to ~1 s for the title to reach Ghostty and focuses that surface
-// (activating first, or macOS may raise the last-active window over it).
-// Returns its id, "!"-prefixed when focus failed, or "" when it never showed.
-const GHOSTTY_FOCUS = `on run argv
-  set marker to item 1 of argv
+// Waits up to ~1 s for the marker title to reach Ghostty and returns that
+// surface's id ("" when it never showed). Mode "focus" also focuses it
+// (activating first, or macOS may raise the last-active window over it) and
+// "!"-prefixes the id when that failed.
+const GHOSTTY_FIND = `on run argv
+  set {marker, mode} to {item 1 of argv, item 2 of argv}
   tell application "Ghostty"
-    activate
+    if mode is "focus" then activate
     repeat 20 times
       set hits to (every terminal whose name is marker)
       if (count of hits) > 0 then
         set t to item 1 of hits
         set tid to id of t
-        try
-          focus t
-        on error
-          return "!" & tid
-        end try
+        if mode is "focus" then
+          try
+            focus t
+          on error
+            return "!" & tid
+          end try
+        end if
         return tid
       end if
       delay 0.05
     end repeat
   end tell
   return ""
+end run`;
+
+// Pastes argv 2 into terminal argv 1, or presses Enter there when no text is
+// given. Focus does not change.
+const GHOSTTY_TYPE = `on run argv
+  tell application "Ghostty"
+    set t to first terminal whose id is (item 1 of argv)
+    if (count of argv) > 1 then
+      input text (item 2 of argv) to t
+    else
+      send key "enter" to t
+    end if
+  end tell
 end run`;
 
 /** Parse GHOSTTY_LIST output into a Map of terminal id -> title. */
@@ -200,10 +217,11 @@ const MARKER_RE = /^ccam-[0-9a-f-]{36}$/;
 const restoredTitles = new Map();
 
 /**
- * Focus the Ghostty surface attached to `tty`. True when it was found and
- * focused; throws when Ghostty or the tty cannot be reached.
+ * Find the Ghostty surface attached to `tty` (`mode` "find") and focus it
+ * (`mode` "focus"). Returns its terminal id, or "" when it was not found or
+ * focus failed; throws when Ghostty or the tty cannot be reached.
  */
-async function focusGhosttySurface(tty) {
+async function findGhosttySurface(tty, mode) {
   const marker = `ccam-${crypto.randomUUID()}`;
   const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
   try {
@@ -216,7 +234,7 @@ async function focusGhosttySurface(tty) {
   }
   let found = "";
   try {
-    found = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
+    found = await run("osascript", ["-e", GHOSTTY_FIND, marker, mode]);
   } finally {
     // ponytail: marker never seen -> the surface and its old title are
     // unknown, so the title is cleared (better than leaving the marker); the
@@ -227,13 +245,22 @@ async function focusGhosttySurface(tty) {
     if (id) restoredTitles.set(id, title);
     writeTitle(tty, title);
   }
-  return Boolean(found) && !found.startsWith("!");
+  return found.startsWith("!") ? "" : found;
 }
 
 /** `/dev/ttysNNN` the process `pid` writes to, or null (no tty / gone). */
 async function ttyOf(pid) {
   const name = await run("ps", ["-o", "tty=", "-p", String(pid)]).catch(() => "");
   return /^ttys\d+$/.test(name) ? `/dev/${name}` : null;
+}
+
+/** Bundle path of the first `.app` among `pid`'s ancestors, or null. */
+async function hostBundle(pid) {
+  for (const { comm } of await processChain(pid)) {
+    const m = comm.match(/^(\/.+?\.app)\/Contents\/MacOS\//);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /**
@@ -245,20 +272,16 @@ async function ttyOf(pid) {
  * AppleScript (iTerm2/Terminal select by tty) if that matters.
  */
 async function activateApp(pid, tty) {
-  if (process.platform !== "darwin" || !pid) return { app: null, exact: false };
-  for (const { comm } of await processChain(pid)) {
-    const m = comm.match(/^(\/.+?\.app)\/Contents\/MacOS\//);
-    if (!m) continue;
-    const app = path.basename(m[1], ".app");
-    let exact = false;
-    if (app === "Ghostty") {
-      const surface = tty || (await ttyOf(pid));
-      if (surface) exact = await focusGhosttySurface(surface).catch(() => false);
-    }
-    if (!exact) await run("open", ["-a", m[1]]);
-    return { app, exact };
+  const bundle = process.platform === "darwin" && pid ? await hostBundle(pid) : null;
+  if (!bundle) return { app: null, exact: false };
+  const app = path.basename(bundle, ".app");
+  let exact = false;
+  if (app === "Ghostty") {
+    const surface = tty || (await ttyOf(pid));
+    if (surface) exact = Boolean(await findGhosttySurface(surface, "focus").catch(() => ""));
   }
-  return { app: null, exact: false };
+  if (!exact) await run("open", ["-a", bundle]);
+  return { app, exact };
 }
 
 async function paneInfo(term) {
@@ -278,11 +301,16 @@ async function paneInfo(term) {
   }
 }
 
-// Focus requests run one at a time, start to finish: an overlapping one could
-// switch the tmux client between the other's selection and its Ghostty probe,
-// or snapshot the other's marker as the title to restore.
+// Focus and input requests run one at a time, start to finish: an overlapping
+// one could switch the tmux client between the other's selection and its
+// Ghostty probe, or snapshot the other's marker as the title to restore.
 // ponytail: one global queue; key it by tty if requests ever pile up.
-let focusQueue = Promise.resolve();
+let terminalQueue = Promise.resolve();
+function queued(fn) {
+  const turn = terminalQueue.then(fn);
+  terminalQueue = turn.catch(() => {});
+  return turn;
+}
 
 /**
  * Bring the session's terminal to the front: select its tmux window and pane,
@@ -291,9 +319,7 @@ let focusQueue = Promise.resolve();
  * whether the precise window/tab/split was focused (Ghostty only).
  */
 function focusTerminal(term) {
-  const turn = focusQueue.then(() => focusNow(term));
-  focusQueue = turn.catch(() => {});
-  return turn;
+  return queued(() => focusNow(term));
 }
 
 async function focusNow(term) {
@@ -327,16 +353,7 @@ async function focusNow(term) {
   throw new TerminalError("ENOTERMINAL", "no reachable terminal recorded for this session");
 }
 
-/**
- * Type `text` into the session's tmux pane and press Enter. Refuses unless the
- * pane still runs the session's CLI: the foreground command must not be a
- * shell, and the recorded CLI pid (when known) must be a descendant of the
- * pane's process.
- */
-async function sendInput(term, text) {
-  if (!term?.tmux_pane) {
-    throw new TerminalError("ENOTMUX", "session is not running inside tmux");
-  }
+function checkInput(text) {
   if (typeof text !== "string" || !text.trim()) {
     throw new TerminalError("INVALID_INPUT", "text is required", 400);
   }
@@ -349,6 +366,92 @@ async function sendInput(term, text) {
   if (/[\x00-\x08\x0b-\x1f\x7f]/.test(text)) {
     throw new TerminalError("INVALID_INPUT", "text contains control characters", 400);
   }
+}
+
+/** Milliseconds in a `ps -o etime` value (`[[dd-]hh:]mm:ss`); NaN if malformed. */
+function etimeMs(etime) {
+  const [days, clock] = String(etime).includes("-") ? etime.split("-") : [0, etime];
+  const secs = String(clock)
+    .split(":")
+    .reduce((acc, part) => acc * 60 + Number(part), 0);
+  return (Number(days) * 86400 + secs) * 1000;
+}
+
+/**
+ * Throw unless `pid` is still the session's CLI and owns `tty`'s foreground.
+ * It must have started no later than the session's last hook (`lastSeen`),
+ * or the pid was reused; it must still sit on `tty` and lead the foreground
+ * process group, and that group must not be a shell (the CLI exited).
+ */
+async function assertCliForeground(pid, tty, lastSeen) {
+  const line = await run("ps", ["-o", "pgid=,tpgid=,tty=,etime=", "-p", String(pid)]).catch(
+    () => ""
+  );
+  const [pgid, tpgid, ttyName, etime] = line.split(/\s+/);
+  const fg = tpgid ? await run("ps", ["-o", "comm=", "-p", tpgid]).catch(() => "") : "";
+  if (!fg || SHELLS.has(path.basename(fg).replace(/^-/, ""))) {
+    throw new TerminalError(
+      "EPANESHELL",
+      "the session's CLI is no longer running in that terminal"
+    );
+  }
+  // ps etime has 1 s resolution; allow 2 s of slack against the hook clock.
+  const started = Date.now() - etimeMs(etime);
+  if (`/dev/${ttyName}` !== tty || !(started <= Date.parse(lastSeen) + 2000)) {
+    throw new TerminalError("EPANEMISMATCH", "that process no longer belongs to this session");
+  }
+  if (pgid !== tpgid) {
+    throw new TerminalError(
+      "EPANEMISMATCH",
+      "the session's CLI is not in the foreground of its terminal"
+    );
+  }
+}
+
+/**
+ * Outside tmux: paste `text` into the Ghostty surface on the CLI's tty and
+ * press Enter. The CLI's ownership of that tty is checked before the surface
+ * is looked up, again right before the paste, and again before Enter.
+ * `lastSeen` is the session's last hook time (see assertCliForeground).
+ */
+async function sendGhosttyInput(term, text, lastSeen) {
+  const tty = process.platform === "darwin" && term?.pid ? await ttyOf(term.pid) : null;
+  const bundle = tty ? await hostBundle(term.pid) : null;
+  if (!bundle || path.basename(bundle, ".app") !== "Ghostty") {
+    throw new TerminalError("ENOTMUX", "session is not running inside tmux or Ghostty");
+  }
+  checkInput(text);
+  const ensure = () => assertCliForeground(term.pid, tty, lastSeen);
+  await ensure();
+  const id = await findGhosttySurface(tty, "find");
+  if (!id) {
+    throw new TerminalError("ENOSURFACE", "the session's Ghostty terminal could not be found");
+  }
+  await ensure();
+  await run("osascript", ["-e", GHOSTTY_TYPE, id, text]);
+  await new Promise((r) => setTimeout(r, SUBMIT_DELAY_MS));
+  // ponytail: ~100 ms (one osascript launch) remain between this check and
+  // Enter; closing that needs Ghostty to report a surface's pid or tty.
+  await ensure();
+  await run("osascript", ["-e", GHOSTTY_TYPE, id]);
+  return { sent: true };
+}
+
+/**
+ * Type `text` into the session's tmux pane and press Enter. Refuses unless the
+ * pane still runs the session's CLI: the foreground command must not be a
+ * shell, and the recorded CLI pid (when known) must be a descendant of the
+ * pane's process. Outside tmux, Ghostty sessions go through sendGhosttyInput,
+ * which needs `lastSeen`, the session's last hook time.
+ */
+function sendInput(term, text, lastSeen) {
+  return queued(() =>
+    term?.tmux_pane ? sendTmuxInput(term, text) : sendGhosttyInput(term, text, lastSeen)
+  );
+}
+
+async function sendTmuxInput(term, text) {
+  checkInput(text);
   const info = await paneInfo(term);
   if (SHELLS.has(path.basename(info.command || "").replace(/^-/, ""))) {
     throw new TerminalError("EPANESHELL", "the session's CLI is no longer running in that pane");
@@ -376,5 +479,6 @@ module.exports = {
   sendInput,
   parseGhosttyTerminals,
   sanitizeTitle,
+  etimeMs,
   MAX_INPUT_CHARS,
 };

@@ -2,8 +2,8 @@
  * @file TerminalActions.tsx
  * @description Card footer actions that reach a live session's terminal: an
  * "Open terminal" button (focuses the session's tmux pane and raises the
- * terminal app) and, while the session waits inside tmux, a one-line reply box
- * that types into its pane. Renders nothing for sessions without a terminal
+ * terminal app) and, while the session waits inside tmux or Ghostty, a one-line
+ * reply box that types into its pane or surface. Renders nothing for sessions without a terminal
  * record (remote, imported, or started before the hooks reported one).
  * @author Son Nguyen <hoangson091104@gmail.com>
  */
@@ -67,7 +67,7 @@ export function TerminalActions({ session, waiting }: TerminalActionsProps) {
           <SquareTerminal className="w-3 h-3" />
           {t("terminal.open")}
         </button>
-        {waiting && terminal.tmux && (
+        {waiting && (terminal.tmux || terminal.ghostty) && (
           <form
             className="flex items-center gap-1 min-w-0 flex-1"
             onSubmit={(e) => {

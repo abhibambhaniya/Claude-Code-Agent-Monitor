@@ -185,7 +185,7 @@ CREATE TABLE sessions (
         CHECK (status IN ('active','completed','error','abandoned')),
     cwd TEXT,
     repo_remote_url TEXT,                                            -- first sanitized collector remote
-    terminal TEXT,                                                   -- JSON {pid, tmux_pane?, tmux_socket?} from local hooks
+    terminal TEXT,                                                   -- JSON {pid, tmux_pane?, tmux_socket?, ghostty?} from local hooks
     model TEXT,
     provider TEXT NOT NULL DEFAULT 'claude',                          -- claude | cursor | codex
     started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -209,7 +209,7 @@ CREATE TABLE sessions (
 | `status` | TEXT | NO | `active`, `completed`, `error`, or `abandoned` (CHECK-constrained). Besides the `SessionEnd` hook, the 15 s watchdog's **liveness reap** also lands `active` → `completed` when no running matching local `claude` or `codex` process has the session's `cwd` (a `SessionEnd` lost while the dashboard was down); gated by `DASHBOARD_LIVENESS_IDLE_SECONDS`, disabled via `DASHBOARD_LIVENESS_PROBE=0`. Sessions with a non-`local` `source` (Remote Data Sources) are always exempt from the local process reap and transcript watchdog. Each remote provider has independent health: sessions stay out of stale sweeps only while their own Claude or Codex mirror is healthy. If that provider reports `error`/`unavailable`, or remains `syncing` longer than `DASHBOARD_STALE_MINUTES`, an active session older than that same window falls back to the ordinary stale sweep (`abandoned`, agents completed) until a fresh mirror can reactivate it |
 | `cwd` | TEXT | YES | Working directory the CLI was launched from |
 | `repo_remote_url` | TEXT | YES | First non-empty sanitized collector remote; later hooks/batches cannot overwrite it. Not discovered automatically from `cwd`. |
-| `terminal` | TEXT | YES | JSON `{pid, tmux_pane?, tmux_socket?}` from the hook envelope's `terminal` field: the CLI pid and, inside tmux, its pane. Stored only for hooks from this machine (loopback), updated when it changes, never bumps `updated_at`. Backs `/api/terminal` focus/reply. NULL for remote, imported, and older sessions |
+| `terminal` | TEXT | YES | JSON `{pid, tmux_pane?, tmux_socket?, ghostty?}` from the hook envelope's `terminal` field: the CLI pid and, inside tmux, its pane; outside tmux on macOS, `ghostty: true` when `TERM_PROGRAM=ghostty`. Stored only for hooks from this machine (loopback), updated when it changes, never bumps `updated_at`. Backs `/api/terminal` focus/reply. NULL for remote, imported, and older sessions |
 | `model` | TEXT | YES | Claude model ID (e.g. `claude-opus-4-7`) |
 | `provider` | TEXT | NO | Product that produced the session: `claude` (default), `cursor`, or `codex`. Powers the composable `providers` API scope and lets shared token buckets use the correct rate card; selecting the Claude-compatible product scope includes both `claude` and `cursor`. |
 | `started_at` | TEXT | NO | ISO 8601 timestamp |

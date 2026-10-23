@@ -42,13 +42,17 @@ const ports = resolvePorts();
 /**
  * Where this session's CLI runs, so the dashboard can focus its terminal or
  * type a reply into it. Hooks inherit Claude Code's environment, so `$TMUX_PANE`
- * names the session's own pane and our parent pid is the CLI process.
+ * names the session's own pane and our parent pid is the CLI process. Outside
+ * tmux, `ghostty` marks a CLI running straight in Ghostty on macOS, which the dashboard
+ * can also type replies into.
  */
 function terminalInfo() {
   const info = { pid: process.ppid };
   if (process.env.TMUX && process.env.TMUX_PANE) {
     info.tmux_pane = process.env.TMUX_PANE;
     info.tmux_socket = process.env.TMUX.split(",")[0];
+  } else if (process.platform === "darwin" && process.env.TERM_PROGRAM === "ghostty") {
+    info.ghostty = true;
   }
   return info;
 }

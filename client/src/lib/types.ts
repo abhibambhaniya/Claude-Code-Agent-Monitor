@@ -700,7 +700,7 @@ export interface Session {
    * the server may grow new values; normalize via {@link sessionAwaitingReason}
    * before rendering. Null/absent when the session is not waiting. */
   awaiting_reason?: string | null;
-  /** JSON `{pid, tmux_pane?, tmux_socket?}` from local hooks: where the CLI
+  /** JSON `{pid, tmux_pane?, tmux_socket?, ghostty?}` from local hooks: where the CLI
    * runs. Read via {@link sessionTerminal}; null for remote/imported sessions. */
   terminal?: string | null;
   /** Machine this session was collected from. `"local"` (the default) is this
@@ -1053,16 +1053,16 @@ export function agentAwaitingReason(agent: Agent | undefined | null): AwaitingRe
 
 /**
  * What the dashboard can reach of the session's terminal, from its `terminal`
- * record: null when there is none, else whether it runs inside tmux (needed
- * for the reply box; focusing works either way).
+ * record: null when there is none, else whether it runs inside tmux or
+ * straight in Ghostty (either enables the reply box; focusing works anyway).
  *
  * @param session - Session row.
  */
-export function sessionTerminal(session: Session): { tmux: boolean } | null {
+export function sessionTerminal(session: Session): { tmux: boolean; ghostty: boolean } | null {
   if (!session.terminal) return null;
   try {
-    const parsed = JSON.parse(session.terminal) as { tmux_pane?: unknown };
-    return { tmux: typeof parsed.tmux_pane === "string" };
+    const parsed = JSON.parse(session.terminal) as { tmux_pane?: unknown; ghostty?: unknown };
+    return { tmux: typeof parsed.tmux_pane === "string", ghostty: parsed.ghostty === true };
   } catch {
     return null;
   }

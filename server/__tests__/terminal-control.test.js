@@ -18,6 +18,7 @@ const {
   sendInput,
   parseGhosttyTerminals,
   sanitizeTitle,
+  etimeMs,
 } = require("../lib/terminal-control");
 
 describe("sanitizeTerminal", () => {
@@ -39,6 +40,16 @@ describe("sanitizeTerminal", () => {
     assert.equal(sanitizeTerminal("nope"), null);
     assert.equal(parseTerminal("{not json"), null);
   });
+
+  it("keeps the Ghostty flag only for a pid outside tmux", () => {
+    assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: true }), { pid: 7, ghostty: true });
+    assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: "yes" }), { pid: 7 });
+    assert.equal(sanitizeTerminal({ ghostty: true }), null);
+    assert.deepEqual(
+      sanitizeTerminal({ pid: 7, ghostty: true, tmux_pane: "%1", tmux_socket: "/tmp/s" }),
+      { pid: 7, tmux_pane: "%1", tmux_socket: "/tmp/s" }
+    );
+  });
 });
 
 describe("Ghostty exact-tab helpers", () => {
@@ -58,6 +69,13 @@ describe("Ghostty exact-tab helpers", () => {
     assert.equal(sanitizeTitle(undefined), "");
   });
 
+  it("reads ps etime values", () => {
+    assert.equal(etimeMs("00:05"), 5000);
+    assert.equal(etimeMs("02:03:04"), (2 * 3600 + 3 * 60 + 4) * 1000);
+    assert.equal(etimeMs("1-00:00:01"), (86400 + 1) * 1000);
+    assert.ok(Number.isNaN(etimeMs(undefined)));
+  });
+
   it("keeps titles under Ghostty's 256-byte limit on a code point boundary", () => {
     assert.equal(sanitizeTitle("x".repeat(300)).length, 255);
     const cut = sanitizeTitle("✳".repeat(100)); // 3 bytes each
@@ -65,7 +83,7 @@ describe("Ghostty exact-tab helpers", () => {
   });
 });
 
-describe("focusTerminal in Ghostty", () => {
+describe("focusTerminal and sendInput in Ghostty", () => {
   // A fake Ghostty: one terminal on /dev/ttys009 hosting pid 100, whose title
   // follows the OSC 2 sequences written to that tty. A fake tmux server on
   // socket /s has panes %1 and %2 and one client on that same tty.
@@ -81,6 +99,12 @@ describe("focusTerminal in Ghostty", () => {
       return reply("1 /Applications/Ghostty.app/Contents/MacOS/ghostty");
     }
     if (cmd === "ps" && joined === "-o tty= -p 100") return reply("ttys009");
+    if (cmd === "ps" && joined === "-o pgid=,tpgid=,tty=,etime= -p 100") {
+      return reply(`100 ${ghostty.foreground} ${ghostty.tty} ${ghostty.etime}`);
+    }
+    if (cmd === "ps" && joined === "-o comm= -p 100") return reply("claude");
+    if (cmd === "ps" && joined === "-o comm= -p 200") return reply("-zsh");
+    if (cmd === "ps" && joined === "-o comm= -p 101") return reply("vim");
     if (cmd === "tmux") {
       const [verb, ...rest] = args.slice(2);
       const target = rest[rest.indexOf("-t") + 1];
@@ -96,14 +120,24 @@ describe("focusTerminal in Ghostty", () => {
     if (cmd === "osascript" && args.length === 2) {
       return reply(`T-1\x1f${ghostty.title}\x1e`);
     }
-    if (cmd === "osascript") {
+    if (cmd === "osascript" && args[2].startsWith("ccam-")) {
       // Answer only once the marker is the live title, a little later, so
       // overlapping requests really interleave without the queue.
       return setTimeout(() => {
         const hit = ghostty.seesMarker && ghostty.title === args[2];
-        if (hit) ghostty.shown.push(ghostty.pane);
+        if (hit && args[3] === "focus") ghostty.shown.push(ghostty.pane);
+        if (hit && args[3] === "find") ghostty.onFind?.();
         cb(null, hit ? "T-1" : "");
       }, 20);
+    }
+    if (cmd === "osascript" && args[2] === "T-1") {
+      if (args.length === 4) {
+        ghostty.typed.push(args[3]);
+        ghostty.onPaste?.();
+      } else {
+        ghostty.keys.push("enter");
+      }
+      return reply("");
     }
     return setImmediate(() => cb(new Error(`unexpected ${cmd} ${joined}`)));
   }
@@ -144,8 +178,13 @@ describe("focusTerminal in Ghostty", () => {
     ghostty = {
       title: "✳ my session",
       seesMarker: true,
+      foreground: 100,
+      tty: "ttys009",
+      etime: "10:00",
+      keys: [],
       pane: null,
       shown: [],
+      typed: [],
       opened: [],
       written: Buffer.alloc(0),
     };
@@ -202,6 +241,49 @@ describe("focusTerminal in Ghostty", () => {
     assert.deepEqual(ghostty.opened, ["/Applications/Ghostty.app"]);
     await new Promise((r) => setTimeout(r, 10));
     assert.equal(ghostty.title, "");
+  });
+
+  const now = () => new Date().toISOString();
+  const reply = (text, lastSeen = now()) => terminalControl.sendInput({ pid: 100 }, text, lastSeen);
+
+  it("types a reply into the CLI's surface without focusing it", async () => {
+    assert.deepEqual(await reply("yes\ngo"), { sent: true });
+    assert.deepEqual(ghostty.typed, ["yes\ngo"]);
+    assert.deepEqual(ghostty.keys, ["enter"]);
+    assert.deepEqual(ghostty.shown, []);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ghostty.title, "✳ my session");
+  });
+
+  it("refuses unless the session's CLI owns its tty's foreground", async () => {
+    ghostty.foreground = 200; // a shell took the terminal back
+    await assert.rejects(reply("hi"), { code: "EPANESHELL" });
+    ghostty.foreground = 101; // some other job has the keyboard
+    await assert.rejects(reply("hi"), { code: "EPANEMISMATCH" });
+    ghostty.foreground = 100;
+    // The pid started 5 s ago, after the session's last hook a minute ago:
+    // another process reused it.
+    ghostty.etime = "00:05";
+    await assert.rejects(reply("hi", new Date(Date.now() - 60_000).toISOString()), {
+      code: "EPANEMISMATCH",
+    });
+    ghostty.etime = "10:00";
+    await assert.rejects(reply("hi", null), { code: "EPANEMISMATCH" });
+    ghostty.seesMarker = false;
+    await assert.rejects(reply("hi"), { code: "ENOSURFACE" });
+    assert.deepEqual(ghostty.typed, []);
+  });
+
+  it("re-checks the foreground before the paste and before Enter", async () => {
+    ghostty.onFind = () => (ghostty.foreground = 200); // CLI exits during the lookup
+    await assert.rejects(reply("hi"), { code: "EPANESHELL" });
+    assert.deepEqual(ghostty.typed, []);
+    ghostty.onFind = null;
+    ghostty.foreground = 100;
+    ghostty.onPaste = () => (ghostty.foreground = 200); // ...or right after the paste
+    await assert.rejects(reply("hi"), { code: "EPANESHELL" });
+    assert.deepEqual(ghostty.typed, ["hi"]);
+    assert.deepEqual(ghostty.keys, []);
   });
 });
 
