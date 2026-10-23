@@ -84,6 +84,11 @@ const schemas = {
         nullable: true,
         description: "Name of the terminal app raised (macOS), or null.",
       },
+      exact: {
+        type: "boolean",
+        description:
+          "True when the exact window, tab and split hosting the session was focused (Ghostty on macOS); false when only the app was raised.",
+      },
     },
   },
   TerminalInputResponse: {
@@ -1298,7 +1303,7 @@ const paths = {
       tags: ["Terminal"],
       summary: "Bring a session's terminal to the front",
       description:
-        "Inside tmux: selects the session's window and pane, switches an attached tmux client to it, and (macOS) raises the terminal app hosting that client. Outside tmux: raises the terminal app hosting the CLI process (macOS only). Brings the app forward, not a specific tab. Requires an active session with a terminal record from local hooks. The loopback same-origin guard applies.",
+        "Inside tmux: selects the session's window and pane, switches an attached tmux client to it, and (macOS) raises the terminal app hosting that client. Outside tmux: raises the terminal app hosting the CLI process (macOS only). In Ghostty it focuses the exact window, tab and split on that tty (it briefly retitles the surface with a unique OSC 2 marker to find it via AppleScript, then restores the title) and reports `exact: true`; other apps, or any failure there, fall back to raising the app (`exact: false`). Requires an active session with a terminal record from local hooks. The loopback same-origin guard applies.",
       operationId: "terminalFocus",
       parameters: [terminalSessionParam],
       responses: {

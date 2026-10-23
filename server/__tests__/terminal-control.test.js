@@ -11,7 +11,13 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { sanitizeTerminal, parseTerminal, sendInput } = require("../lib/terminal-control");
+const {
+  sanitizeTerminal,
+  parseTerminal,
+  sendInput,
+  parseGhosttyTerminals,
+  sanitizeTitle,
+} = require("../lib/terminal-control");
 
 describe("sanitizeTerminal", () => {
   it("keeps a well-formed record", () => {
@@ -31,6 +37,25 @@ describe("sanitizeTerminal", () => {
     assert.deepEqual(sanitizeTerminal({ pid: 7, tmux_pane: "%1" }), { pid: 7 });
     assert.equal(sanitizeTerminal("nope"), null);
     assert.equal(parseTerminal("{not json"), null);
+  });
+});
+
+describe("Ghostty exact-tab helpers", () => {
+  it("maps terminal ids to titles, keeping tabs inside a title", () => {
+    const titles = parseGhosttyTerminals("A-1\t✳ fix bug\nB-2\tccam-x\ty\n\nbad line\n");
+    assert.deepEqual(
+      [...titles],
+      [
+        ["A-1", "✳ fix bug"],
+        ["B-2", "ccam-x\ty"],
+      ]
+    );
+  });
+
+  it("strips the controls that would end or inject an OSC sequence", () => {
+    assert.equal(sanitizeTitle("a\x1b]2;evil\x07b\x9cc\n"), "a]2;evilbc");
+    assert.equal(sanitizeTitle(undefined), "");
+    assert.equal(sanitizeTitle("x".repeat(300)).length, 256);
   });
 });
 

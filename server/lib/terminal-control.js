@@ -4,13 +4,15 @@
  * Hook handlers report the session's tmux pane (`$TMUX_PANE` plus the socket
  * from `$TMUX`) and the CLI's pid; this module validates that record, focuses
  * the session (tmux select/switch-client, then raises the terminal app on
- * macOS), and types a reply into a tmux pane. Every external command runs via
- * execFile with an argument array — never through a shell.
+ * macOS — in Ghostty, the exact window/tab/split), and types a reply into a
+ * tmux pane. Every external command runs via execFile with an argument array
+ * — never through a shell.
  * @author Son Nguyen <hoangson091104@gmail.com>
  */
 
 const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const CMD_TIMEOUT_MS = 3000;
@@ -113,22 +115,114 @@ async function processChain(pid) {
   return chain;
 }
 
+// Ghostty's AppleScript dictionary exposes terminal titles but not ttys, so a
+// surface is found by writing a unique OSC 2 title to its tty and looking for
+// it. LIST snapshots titles first so the real one can be put back.
+const GHOSTTY_LIST = `on run argv
+  tell application "Ghostty" to set {ids, names} to {id, name} of every terminal
+  set out to ""
+  repeat with i from 1 to count of ids
+    set out to out & item i of ids & (character id 9) & item i of names & (character id 10)
+  end repeat
+  return out
+end run`;
+// Waits up to ~1 s for the title to reach Ghostty, focuses that surface and
+// returns its id ("" when it never showed up).
+const GHOSTTY_FOCUS = `on run argv
+  set marker to item 1 of argv
+  tell application "Ghostty"
+    activate
+    repeat 20 times
+      set hits to (every terminal whose name is marker)
+      if (count of hits) > 0 then
+        set t to item 1 of hits
+        focus t
+        return id of t
+      end if
+      delay 0.05
+    end repeat
+  end tell
+  return ""
+end run`;
+
+/** Parse GHOSTTY_LIST output into a Map of terminal id -> title. */
+function parseGhosttyTerminals(out) {
+  const titles = new Map();
+  for (const line of String(out).split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab > 0) titles.set(line.slice(0, tab), line.slice(tab + 1));
+  }
+  return titles;
+}
+
+/** A title safe to embed in OSC 2: no C0/C1 controls (ESC/BEL end the sequence). */
+function sanitizeTitle(title) {
+  // eslint-disable-next-line no-control-regex
+  return String(title ?? "")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+    .slice(0, 256);
+}
+
+function writeTitle(tty, title) {
+  // O_NOCTTY: the server must not adopt the session's tty as its own.
+  // O_NONBLOCK: a terminal paused with ^S must not hang the request.
+  const { O_WRONLY, O_NOCTTY, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(tty, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+  try {
+    fs.writeSync(fd, `\x1b]2;${sanitizeTitle(title)}\x07`);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Focus the Ghostty surface attached to `tty`. True when it was found and
+ * focused; throws when Ghostty or the tty cannot be reached.
+ */
+async function focusGhosttySurface(tty) {
+  const marker = `ccam-${crypto.randomUUID()}`;
+  const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
+  writeTitle(tty, marker);
+  let id = "";
+  try {
+    id = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
+  } finally {
+    // ponytail: marker never seen -> the old title is unknown, so the title is
+    // cleared; the CLI or shell sets a fresh one on its next redraw/prompt.
+    writeTitle(tty, titles.get(id) ?? "");
+  }
+  return Boolean(id);
+}
+
+/** `/dev/ttysNNN` the process `pid` writes to, or null (no tty / gone). */
+async function ttyOf(pid) {
+  const name = await run("ps", ["-o", "tty=", "-p", String(pid)]).catch(() => "");
+  return /^ttys\d+$/.test(name) ? `/dev/${name}` : null;
+}
+
 /**
  * Raise the macOS app that hosts `pid` (the first `.app` bundle among its
- * ancestors). Returns the app name, or null when none is found / not macOS.
- * ponytail: brings the app forward, not the exact tab or window; add
- * per-terminal AppleScript (iTerm2/Terminal select by tty) if that matters.
+ * ancestors). In Ghostty, focus the exact surface on `tty` (default: the
+ * pid's own tty) first; any failure there falls back to raising the app.
+ * Returns {app, exact}; app is null when none is found / not macOS.
+ * ponytail: other apps get the app, not the tab; add per-terminal
+ * AppleScript (iTerm2/Terminal select by tty) if that matters.
  */
-async function activateApp(pid) {
-  if (process.platform !== "darwin" || !pid) return null;
+async function activateApp(pid, tty) {
+  if (process.platform !== "darwin" || !pid) return { app: null, exact: false };
   for (const { comm } of await processChain(pid)) {
     const m = comm.match(/^(\/.+?\.app)\/Contents\/MacOS\//);
-    if (m) {
-      await run("open", ["-a", m[1]]);
-      return path.basename(m[1], ".app");
+    if (!m) continue;
+    const app = path.basename(m[1], ".app");
+    let exact = false;
+    if (app === "Ghostty") {
+      const surface = tty || (await ttyOf(pid));
+      if (surface) exact = await focusGhosttySurface(surface).catch(() => false);
     }
+    if (!exact) await run("open", ["-a", m[1]]);
+    return { app, exact };
   }
-  return null;
+  return { app: null, exact: false };
 }
 
 async function paneInfo(term) {
@@ -151,7 +245,8 @@ async function paneInfo(term) {
 /**
  * Bring the session's terminal to the front: select its tmux window and pane,
  * switch an attached client to it, and raise the terminal app hosting that
- * client. Without tmux, raise the app hosting the CLI process.
+ * client. Without tmux, raise the app hosting the CLI process. `exact` says
+ * whether the precise window/tab/split was focused (Ghostty only).
  */
 async function focusTerminal(term) {
   if (term?.tmux_pane) {
@@ -159,22 +254,27 @@ async function focusTerminal(term) {
     await tmux(term, ["select-window", "-t", term.tmux_pane]);
     await tmux(term, ["select-pane", "-t", term.tmux_pane]);
     const clients = (
-      await tmux(term, ["list-clients", "-F", "#{client_pid}\t#{client_name}\t#{client_session}"])
+      await tmux(term, [
+        "list-clients",
+        "-F",
+        "#{client_pid}\t#{client_name}\t#{client_session}\t#{client_tty}",
+      ])
     )
       .split("\n")
       .filter(Boolean)
       .map((l) => {
-        const [pid, name, session] = l.split("\t");
-        return { pid: Number(pid), name, session };
+        const [pid, name, session, tty] = l.split("\t");
+        return { pid: Number(pid), name, session, tty };
       });
     const client = clients.find((c) => c.session === info.session) || clients[0];
-    if (!client) return { tmux: true, attached: false, app: null };
+    if (!client) return { tmux: true, attached: false, app: null, exact: false };
     await tmux(term, ["switch-client", "-c", client.name, "-t", term.tmux_pane]);
-    return { tmux: true, attached: true, app: await activateApp(client.pid) };
+    const tty = /^\/dev\/ttys\d+$/.test(client.tty) ? client.tty : null;
+    return { tmux: true, attached: true, ...(await activateApp(client.pid, tty)) };
   }
   if (term?.pid) {
-    const app = await activateApp(term.pid);
-    if (app) return { tmux: false, attached: true, app };
+    const raised = await activateApp(term.pid);
+    if (raised.app) return { tmux: false, attached: true, ...raised };
   }
   throw new TerminalError("ENOTERMINAL", "no reachable terminal recorded for this session");
 }
@@ -226,5 +326,7 @@ module.exports = {
   parseTerminal,
   focusTerminal,
   sendInput,
+  parseGhosttyTerminals,
+  sanitizeTitle,
   MAX_INPUT_CHARS,
 };
