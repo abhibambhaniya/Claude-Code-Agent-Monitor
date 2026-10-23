@@ -180,11 +180,15 @@ function writeTitle(tty, title) {
   // O_NONBLOCK: a terminal paused with ^S must not hang the request.
   const { O_WRONLY, O_NOCTTY, O_NONBLOCK } = fs.constants;
   const fd = fs.openSync(tty, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+  // A full tty buffer can take part of it; finish or throw (EAGAIN), never
+  // stop mid-sequence silently. `partial` tells the caller bytes got through.
+  const buf = Buffer.from(`\x1b]2;${sanitizeTitle(title)}\x07`);
+  let off = 0;
   try {
-    // A full tty buffer can take part of it; finish or throw (EAGAIN), never
-    // stop mid-sequence silently.
-    const buf = Buffer.from(`\x1b]2;${sanitizeTitle(title)}\x07`);
-    for (let off = 0; off < buf.length; ) off += fs.writeSync(fd, buf, off);
+    while (off < buf.length) off += fs.writeSync(fd, buf, off);
+  } catch (err) {
+    err.partial = off > 0;
+    throw err;
   } finally {
     fs.closeSync(fd);
   }
@@ -202,9 +206,16 @@ const restoredTitles = new Map();
 async function focusGhosttySurface(tty) {
   const marker = `ccam-${crypto.randomUUID()}`;
   const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
-  let found = "";
   try {
     writeTitle(tty, marker);
+  } catch (err) {
+    // Nothing written leaves the title untouched; a cut-short marker must not
+    // stay mid-sequence.
+    if (err.partial) writeTitle(tty, "");
+    throw err;
+  }
+  let found = "";
+  try {
     found = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
   } finally {
     // ponytail: marker never seen -> the surface and its old title are

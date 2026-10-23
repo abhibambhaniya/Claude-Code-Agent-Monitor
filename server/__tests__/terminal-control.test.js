@@ -116,6 +116,10 @@ describe("focusTerminal in Ghostty", () => {
     // Take at most 8 bytes per write, like a nearly full tty buffer, and, like
     // Ghostty, apply a completed title a moment later.
     mock.method(fs, "writeSync", (_fd, buf, off) => {
+      if (ghostty.ttyFull) {
+        ghostty.ttyFull = false; // full for one write, then drained
+        throw Object.assign(new Error("EAGAIN"), { code: "EAGAIN" });
+      }
       const n = Math.min(8, buf.length - off);
       ghostty.written = Buffer.concat([ghostty.written, buf.subarray(off, off + n)]);
       const done = /^\x1b\]2;(.*)\x07$/s.exec(ghostty.written.toString());
@@ -180,6 +184,15 @@ describe("focusTerminal in Ghostty", () => {
       [true, true]
     );
     assert.deepEqual(ghostty.shown, ["%1", "%2"]);
+  });
+
+  it("leaves the title alone when the marker cannot be written at all", async () => {
+    ghostty.ttyFull = true;
+    const res = await terminalControl.focusTerminal({ pid: 100 });
+    assert.equal(res.exact, false);
+    assert.deepEqual(ghostty.opened, ["/Applications/Ghostty.app"]);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ghostty.title, "✳ my session");
   });
 
   it("falls back to raising the app when the marker never shows up", async () => {
