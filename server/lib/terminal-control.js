@@ -117,12 +117,14 @@ async function processChain(pid) {
 
 // Ghostty's AppleScript dictionary exposes terminal titles but not ttys, so a
 // surface is found by writing a unique OSC 2 title to its tty and looking for
-// it. LIST snapshots titles first so the real one can be put back.
+// it. LIST snapshots titles first so the real one can be put back; records
+// end in RS (\x1e), fields split on US (\x1f), so trimming the output never
+// eats a title's own whitespace.
 const GHOSTTY_LIST = `on run argv
   tell application "Ghostty" to set {ids, names} to {id, name} of every terminal
   set out to ""
   repeat with i from 1 to count of ids
-    set out to out & item i of ids & (character id 9) & item i of names & (character id 10)
+    set out to out & item i of ids & (character id 31) & item i of names & (character id 30)
   end repeat
   return out
 end run`;
@@ -154,9 +156,9 @@ end run`;
 /** Parse GHOSTTY_LIST output into a Map of terminal id -> title. */
 function parseGhosttyTerminals(out) {
   const titles = new Map();
-  for (const line of String(out).split("\n")) {
-    const tab = line.indexOf("\t");
-    if (tab > 0) titles.set(line.slice(0, tab), line.slice(tab + 1));
+  for (const record of String(out).split("\x1e")) {
+    const sep = record.indexOf("\x1f");
+    if (sep > 0) titles.set(record.slice(0, sep), record.slice(sep + 1));
   }
   return titles;
 }
@@ -179,16 +181,15 @@ function writeTitle(tty, title) {
   const { O_WRONLY, O_NOCTTY, O_NONBLOCK } = fs.constants;
   const fd = fs.openSync(tty, O_WRONLY | O_NOCTTY | O_NONBLOCK);
   try {
-    fs.writeSync(fd, `\x1b]2;${sanitizeTitle(title)}\x07`);
+    // A full tty buffer can take part of it; finish or throw (EAGAIN), never
+    // stop mid-sequence silently.
+    const buf = Buffer.from(`\x1b]2;${sanitizeTitle(title)}\x07`);
+    for (let off = 0; off < buf.length; ) off += fs.writeSync(fd, buf, off);
   } finally {
     fs.closeSync(fd);
   }
 }
 
-// Marker transactions run one at a time: an overlapping one on the same tty
-// would snapshot the other's marker as the title to restore.
-// ponytail: one global queue; key it by tty if requests ever pile up.
-let ghosttyQueue = Promise.resolve();
 const MARKER_RE = /^ccam-[0-9a-f-]{36}$/;
 // Title each surface was last restored to. Ghostty applies OSC 2 a moment
 // after the write, so a back-to-back snapshot can still show the old marker.
@@ -198,28 +199,24 @@ const restoredTitles = new Map();
  * Focus the Ghostty surface attached to `tty`. True when it was found and
  * focused; throws when Ghostty or the tty cannot be reached.
  */
-function focusGhosttySurface(tty) {
-  const turn = ghosttyQueue.then(async () => {
-    const marker = `ccam-${crypto.randomUUID()}`;
-    const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
+async function focusGhosttySurface(tty) {
+  const marker = `ccam-${crypto.randomUUID()}`;
+  const titles = parseGhosttyTerminals(await run("osascript", ["-e", GHOSTTY_LIST]));
+  let found = "";
+  try {
     writeTitle(tty, marker);
-    let found = "";
-    try {
-      found = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
-    } finally {
-      // ponytail: marker never seen -> the surface and its old title are
-      // unknown, so the title is cleared (better than leaving the marker); the
-      // CLI or shell sets a fresh one on its next redraw/prompt.
-      const id = found.replace(/^!/, "");
-      let title = titles.get(id) ?? "";
-      if (MARKER_RE.test(title)) title = restoredTitles.get(id) ?? "";
-      if (id) restoredTitles.set(id, title);
-      writeTitle(tty, title);
-    }
-    return Boolean(found) && !found.startsWith("!");
-  });
-  ghosttyQueue = turn.catch(() => {});
-  return turn;
+    found = await run("osascript", ["-e", GHOSTTY_FOCUS, marker]);
+  } finally {
+    // ponytail: marker never seen -> the surface and its old title are
+    // unknown, so the title is cleared (better than leaving the marker); the
+    // CLI or shell sets a fresh one on its next redraw/prompt.
+    const id = found.replace(/^!/, "");
+    let title = titles.get(id) ?? "";
+    if (MARKER_RE.test(title)) title = restoredTitles.get(id) ?? "";
+    if (id) restoredTitles.set(id, title);
+    writeTitle(tty, title);
+  }
+  return Boolean(found) && !found.startsWith("!");
 }
 
 /** `/dev/ttysNNN` the process `pid` writes to, or null (no tty / gone). */
@@ -270,13 +267,25 @@ async function paneInfo(term) {
   }
 }
 
+// Focus requests run one at a time, start to finish: an overlapping one could
+// switch the tmux client between the other's selection and its Ghostty probe,
+// or snapshot the other's marker as the title to restore.
+// ponytail: one global queue; key it by tty if requests ever pile up.
+let focusQueue = Promise.resolve();
+
 /**
  * Bring the session's terminal to the front: select its tmux window and pane,
  * switch an attached client to it, and raise the terminal app hosting that
  * client. Without tmux, raise the app hosting the CLI process. `exact` says
  * whether the precise window/tab/split was focused (Ghostty only).
  */
-async function focusTerminal(term) {
+function focusTerminal(term) {
+  const turn = focusQueue.then(() => focusNow(term));
+  focusQueue = turn.catch(() => {});
+  return turn;
+}
+
+async function focusNow(term) {
   if (term?.tmux_pane) {
     const info = await paneInfo(term);
     await tmux(term, ["select-window", "-t", term.tmux_pane]);

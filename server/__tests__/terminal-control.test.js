@@ -42,13 +42,13 @@ describe("sanitizeTerminal", () => {
 });
 
 describe("Ghostty exact-tab helpers", () => {
-  it("maps terminal ids to titles, keeping tabs inside a title", () => {
-    const titles = parseGhosttyTerminals("A-1\t✳ fix bug\nB-2\tccam-x\ty\n\nbad line\n");
+  it("maps terminal ids to titles, keeping a title's own whitespace", () => {
+    const titles = parseGhosttyTerminals("A-1\x1f✳ fix bug\x1eB-2\x1fsession  \x1ebad\x1e");
     assert.deepEqual(
       [...titles],
       [
         ["A-1", "✳ fix bug"],
-        ["B-2", "ccam-x\ty"],
+        ["B-2", "session  "],
       ]
     );
   });
@@ -67,7 +67,8 @@ describe("Ghostty exact-tab helpers", () => {
 
 describe("focusTerminal in Ghostty", () => {
   // A fake Ghostty: one terminal on /dev/ttys009 hosting pid 100, whose title
-  // follows the OSC 2 sequences written to that tty.
+  // follows the OSC 2 sequences written to that tty. A fake tmux server on
+  // socket /s has panes %1 and %2 and one client on that same tty.
   let ghostty;
   let terminalControl;
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -80,17 +81,27 @@ describe("focusTerminal in Ghostty", () => {
       return reply("1 /Applications/Ghostty.app/Contents/MacOS/ghostty");
     }
     if (cmd === "ps" && joined === "-o tty= -p 100") return reply("ttys009");
+    if (cmd === "tmux") {
+      const [verb, ...rest] = args.slice(2);
+      const target = rest[rest.indexOf("-t") + 1];
+      if (verb === "display-message") return reply("s\t42\tclaude");
+      if (verb === "list-clients") return reply("100\t/dev/ttys009\ts\t/dev/ttys009");
+      if (verb === "select-pane" || verb === "switch-client") ghostty.pane = target;
+      return reply("");
+    }
     if (cmd === "open") {
       ghostty.opened.push(args[1]);
       return reply("");
     }
-    if (cmd === "osascript" && args.length === 2) return reply(`T-1\t${ghostty.title}\n`);
+    if (cmd === "osascript" && args.length === 2) {
+      return reply(`T-1\x1f${ghostty.title}\x1e`);
+    }
     if (cmd === "osascript") {
       // Answer only once the marker is the live title, a little later, so
       // overlapping requests really interleave without the queue.
       return setTimeout(() => {
         const hit = ghostty.seesMarker && ghostty.title === args[2];
-        if (hit) ghostty.focused++;
+        if (hit) ghostty.shown.push(ghostty.pane);
         cb(null, hit ? "T-1" : "");
       }, 20);
     }
@@ -102,10 +113,17 @@ describe("focusTerminal in Ghostty", () => {
     mock.method(childProcess, "execFile", fakeExecFile);
     mock.method(fs, "openSync", () => 99);
     mock.method(fs, "closeSync", () => {});
-    // Like Ghostty, apply the title a moment after the write.
-    mock.method(fs, "writeSync", (_fd, data) => {
-      const title = /^\x1b\]2;(.*)\x07$/.exec(data)[1];
-      setTimeout(() => (ghostty.title = title), 5);
+    // Take at most 8 bytes per write, like a nearly full tty buffer, and, like
+    // Ghostty, apply a completed title a moment later.
+    mock.method(fs, "writeSync", (_fd, buf, off) => {
+      const n = Math.min(8, buf.length - off);
+      ghostty.written = Buffer.concat([ghostty.written, buf.subarray(off, off + n)]);
+      const done = /^\x1b\]2;(.*)\x07$/s.exec(ghostty.written.toString());
+      if (done) {
+        ghostty.written = Buffer.alloc(0);
+        setTimeout(() => (ghostty.title = done[1]), 5);
+      }
+      return n;
     });
     // Reload so the module picks up the mocked execFile it destructures.
     delete require.cache[require.resolve("../lib/terminal-control")];
@@ -119,13 +137,20 @@ describe("focusTerminal in Ghostty", () => {
   });
 
   beforeEach(() => {
-    ghostty = { title: "✳ my session", seesMarker: true, focused: 0, opened: [] };
+    ghostty = {
+      title: "✳ my session",
+      seesMarker: true,
+      pane: null,
+      shown: [],
+      opened: [],
+      written: Buffer.alloc(0),
+    };
   });
 
   it("focuses the marked surface and restores its title", async () => {
     const res = await terminalControl.focusTerminal({ pid: 100 });
     assert.deepEqual(res, { tmux: false, attached: true, app: "Ghostty", exact: true });
-    assert.equal(ghostty.focused, 1);
+    assert.equal(ghostty.shown.length, 1);
     assert.deepEqual(ghostty.opened, []);
     await new Promise((r) => setTimeout(r, 10));
     assert.equal(ghostty.title, "✳ my session");
@@ -142,6 +167,19 @@ describe("focusTerminal in Ghostty", () => {
     );
     await new Promise((r) => setTimeout(r, 10));
     assert.equal(ghostty.title, "✳ my session");
+  });
+
+  it("shows each overlapping tmux request its own pane", async () => {
+    const term = (pane) => ({ pid: 4242, tmux_pane: pane, tmux_socket: "/s" });
+    const both = await Promise.all([
+      terminalControl.focusTerminal(term("%1")),
+      terminalControl.focusTerminal(term("%2")),
+    ]);
+    assert.deepEqual(
+      both.map((r) => r.exact),
+      [true, true]
+    );
+    assert.deepEqual(ghostty.shown, ["%1", "%2"]);
   });
 
   it("falls back to raising the app when the marker never shows up", async () => {
