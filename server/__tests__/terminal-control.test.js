@@ -41,7 +41,7 @@ describe("sanitizeTerminal", () => {
     assert.equal(parseTerminal("{not json"), null);
   });
 
-  it("keeps seen_at only from the stored record, never from a hook", () => {
+  it("keeps seen_at only from the stored record (hooks.js stamps it)", () => {
     assert.deepEqual(sanitizeTerminal({ pid: 7, ghostty: true, seen_at: "2026-01-01T00:00:00Z" }), {
       pid: 7,
       ghostty: true,

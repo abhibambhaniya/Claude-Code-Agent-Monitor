@@ -54,17 +54,22 @@ describe("terminal record ingestion", () => {
     });
   });
 
-  it("stamps Ghostty records with the hook time, ignoring a client-sent one", async () => {
+  it("keeps the handler's seen_at on Ghostty records, clamped to receipt", async () => {
+    const stored = async (id, seenAt) => {
+      await post("/api/hooks/event", {
+        hook_type: "SessionStart",
+        data: { session_id: id, cwd: "/tmp", source: "startup" },
+        terminal: { pid: 4243, ghostty: true, seen_at: seenAt },
+      });
+      return JSON.parse(stmts.getSession.get(id).terminal);
+    };
+    // Ingested late: the handler's own time stands, not the receipt time.
+    const sent = Date.now() - 30_000;
+    assert.equal((await stored("term-g1", sent)).seen_at, new Date(sent).toISOString());
     const before = Date.now();
-    await post("/api/hooks/event", {
-      hook_type: "SessionStart",
-      data: { session_id: "term-g", cwd: "/tmp", source: "startup" },
-      terminal: { pid: 4243, ghostty: true, seen_at: "2000-01-01T00:00:00Z" },
-    });
-    const stored = JSON.parse(stmts.getSession.get("term-g").terminal);
-    assert.equal(stored.pid, 4243);
-    assert.equal(stored.ghostty, true);
-    assert.ok(Date.parse(stored.seen_at) >= before - 1000);
+    const future = await stored("term-g2", Date.now() + 3_600_000);
+    assert.ok(Date.parse(future.seen_at) >= before && Date.parse(future.seen_at) <= Date.now());
+    assert.deepEqual(await stored("term-g3", "soon"), { pid: 4243, ghostty: true });
   });
 
   it("ignores a malformed record", async () => {

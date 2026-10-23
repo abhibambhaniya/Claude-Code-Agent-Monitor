@@ -53,6 +53,9 @@ function terminalInfo() {
     info.tmux_socket = process.env.TMUX.split(",")[0];
   } else if (process.platform === "darwin" && process.env.TERM_PROGRAM === "ghostty") {
     info.ghostty = true;
+    // Our parent, the CLI, is alive right now; replies use this to reject a
+    // process that later reuses its pid.
+    info.seen_at = Date.now();
   }
   return info;
 }

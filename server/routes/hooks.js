@@ -1415,9 +1415,14 @@ function recordTerminal(req, sessionId) {
   if (!sessionId || !isLoopbackAddress(req.socket?.remoteAddress)) return;
   const terminal = sanitizeTerminal(req.body?.terminal);
   if (!terminal) return;
-  // Proof the CLI pid was alive now; Ghostty replies refuse a process that
-  // started later (pid reuse). Only hooks set it, so session edits can't.
-  if (terminal.ghostty) terminal.seen_at = new Date().toISOString();
+  // When the handler ran, the CLI (its parent) was alive with this pid;
+  // Ghostty replies refuse a process that started later (pid reuse). The
+  // handler's clock is used, not receipt time, so a hook ingested late still
+  // dates the live CLI; it is clamped to receipt and omitted when absent.
+  const sentAt = Number(req.body.terminal.seen_at);
+  if (terminal.ghostty && Number.isFinite(sentAt) && sentAt > 0) {
+    terminal.seen_at = new Date(Math.min(sentAt, Date.now())).toISOString();
+  }
   try {
     const json = JSON.stringify(terminal);
     stmts.setSessionTerminal.run(json, sessionId, json);
