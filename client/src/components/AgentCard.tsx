@@ -62,11 +62,12 @@
  * ----------------------------------------------------------------------------- */
 
 import { useTranslation } from "react-i18next";
+import { TerminalActions } from "./TerminalActions";
 import { Bot, GitBranch, Clock, Wrench, Cpu, Coins } from "lucide-react";
 import { useNavigate } from "react-router";
 import { AgentStatusBadge } from "./StatusBadge";
 import { TodoProgressIndicator } from "./TodoProgressIndicator";
-import { effectiveAgentStatus, isAgentAwaitingInput, agentAwaitingReason } from "../lib/types";
+import { effectiveAgentStatus, agentAwaitingReason } from "../lib/types";
 import type { Agent, Session } from "../lib/types";
 import { formatDuration, timeAgo, formatModelName, pathBasename, fmtCost } from "../lib/format";
 
@@ -139,8 +140,8 @@ export function AgentCard({
 }: AgentCardProps) {
   const navigate = useNavigate();
   const { t } = useTranslation("kanban");
-  const isWaiting = agent.status === "waiting" || isAgentAwaitingInput(agent);
   const status = effectiveAgentStatus(agent);
+  const isWaiting = status === "waiting";
   const isActive = agent.status === "working";
   const isMain = agent.type === "main";
 
@@ -375,6 +376,7 @@ export function AgentCard({
           <span className="font-mono flex-shrink-0">{agent.session_id.slice(0, 8)}</span>
         </span>
       </div>
+      {isMain && session && <TerminalActions session={session} waiting={isWaiting} />}
     </div>
   );
 }

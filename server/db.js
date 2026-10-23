@@ -1216,6 +1216,16 @@ try {
   db.prepare("ALTER TABLE sessions ADD COLUMN repo_remote_url TEXT").run();
 }
 
+// Where a local session's CLI runs: JSON {pid, tmux_pane?, tmux_socket?} sent
+// by the hook handlers. Lets the dashboard focus the session's terminal or type
+// a reply into its tmux pane (server/lib/terminal-control.js). Only stored for
+// hooks from this machine; NULL for remote, imported, and older sessions.
+try {
+  db.prepare("SELECT terminal FROM sessions LIMIT 1").get();
+} catch {
+  db.prepare("ALTER TABLE sessions ADD COLUMN terminal TEXT").run();
+}
+
 // Dashboard run records predate provider-aware launching. Keep existing rows
 // as Claude Code runs and add the Codex-specific sandbox metadata without
 // rebuilding the table, preserving installed users' run history.
@@ -1723,6 +1733,10 @@ const stmts = {
   // rollout. The byte cursors move with it in codex-ingest before this pointer
   // changes, so a later watcher pass continues from the accounted offset.
   replaceSessionTranscriptPath: db.prepare("UPDATE sessions SET transcript_path = ? WHERE id = ?"),
+  // No updated_at bump: the terminal record is plumbing, not session activity.
+  setSessionTerminal: db.prepare(
+    "UPDATE sessions SET terminal = ? WHERE id = ? AND terminal IS NOT ?"
+  ),
   // Tag a session with the machine it was collected from (see remote-sync.js).
   // Remote-pulled sessions are stamped after the shared importer runs over the
   // per-source staging dir; local sessions keep the 'local' default.

@@ -1532,6 +1532,17 @@ DELETE /api/run/:id                   Stop (SIGTERM → SIGKILL after 5 s)
 
 `provider` defaults to `"claude"`. Claude keeps `"headless"` (single-shot, prompt in argv via `-p`) and `"conversation"` modes, including `resumeSessionId` support. Codex always uses a real multi-turn app-server thread; its `permissionMode` is an approval policy (`"untrusted"`, `"on-request"`, or `"never"`) and its `sandbox` is `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. Codex's model list is retrieved from the signed-in local app server, while Claude returns its supported aliases plus locally observed models because the Claude CLI has no model-list command. `run_stream` carries parsed Claude stream-json envelopes or normalized Codex app-server events; `run_status` and `run_input_ack` cover both providers. Concurrency is effectively uncapped (default ceiling 10000, override with `RUN_MAX_CONCURRENT`) — the ceiling exists only to prevent fork-bomb footguns from a buggy client.
 
+### Terminal (`/api/terminal`)
+
+Reach the terminal a live local session runs in. The hook handlers send a `terminal` record (`{pid, tmux_pane?, tmux_socket?}`) with each hook; the server stores it on `sessions.terminal` only for hooks from this machine (loopback). Both routes share the Run Agent loopback-Origin guard and require an `active` session with a record.
+
+```
+POST   /api/terminal/:sessionId/focus  Select the tmux window/pane, switch an attached client to it, raise the terminal app (macOS) → { ok, tmux, attached, app }
+POST   /api/terminal/:sessionId/input  Body: { text } — paste into the tmux pane (bracketed paste), then Enter → { ok, sent }
+```
+
+`input` is tmux-only (`ENOTMUX` otherwise). It is refused when the pane's foreground command is a shell (`EPANESHELL`, the CLI has exited) or the recorded CLI pid no longer lives in that pane (`EPANEMISMATCH`). Text is 1-4000 characters with no control characters other than newline and tab. Other errors: `NOT_FOUND` (404), `ENOTACTIVE` / `ENOTERMINAL` / `EPANEGONE` (409), `ENOTOOL` (501, `tmux` missing). Outside tmux, `focus` only raises the app hosting the CLI process (macOS); it brings the app forward, not a specific tab.
+
 Spawned `claude` processes fire the dashboard's hooks like any other CLI session, so they show up in `/api/sessions`, the analytics, the Kanban board, and the Workflows page automatically — the Run page itself just owns the live streaming UX.
 
 ---

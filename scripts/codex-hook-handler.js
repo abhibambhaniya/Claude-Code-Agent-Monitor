@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Forwards a Codex lifecycle hook to each live dashboard without waiting for a
-// response, so monitoring never delays the Codex CLI.
+// response, so monitoring never delays the Codex CLI. Also reports the Codex
+// process's pid and tmux pane so the dashboard can focus or reply to it.
 // @author Son Nguyen <hoangson091104@gmail.com>
 
 const { sendHook } = require("./hook-transport");
@@ -28,7 +29,12 @@ process.stdin.on("end", () => {
   } catch {
     data = { raw: input };
   }
-  sendHook(resolvePorts, "/api/hooks/codex", { hook_type: hookType, data }).finally(() =>
+  const terminal = { pid: process.ppid };
+  if (process.env.TMUX && process.env.TMUX_PANE) {
+    terminal.tmux_pane = process.env.TMUX_PANE;
+    terminal.tmux_socket = process.env.TMUX.split(",")[0];
+  }
+  sendHook(resolvePorts, "/api/hooks/codex", { hook_type: hookType, data, terminal }).finally(() =>
     setImmediate(() => process.exit(0))
   );
 });

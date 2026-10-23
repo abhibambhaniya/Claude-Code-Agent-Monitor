@@ -27,6 +27,7 @@ const { getRemotePushToken, extractHeaderOnlyToken, tokensMatch } = require("../
 const { REMOTE_PROVIDERS, assertProvider } = require("../lib/remote-sync");
 const { normalizeSpeed, normalizeGeo, normalizeTier } = require("../lib/token-usage");
 const { isCursorTranscriptPath } = require("../lib/cursor-home");
+const { sanitizeTerminal } = require("../lib/terminal-control");
 const { getProjectsDir } = require("../lib/claude-home");
 const {
   TranscriptPathError,
@@ -1404,6 +1405,28 @@ function codexTranscriptPath(data) {
 // rollout must never make Codex wait. The append-only ingestor deduplicates a
 // simultaneous watcher notification by byte cursor and broadcasts the same
 // frames as Claude hooks once processing completes.
+/**
+ * Store where a session's CLI runs (pid + tmux pane) from the hook envelope's
+ * `terminal` field. Only for hooks sent from this machine: a pane or pid from
+ * another host would point the focus / reply actions at an unrelated local
+ * process. Fail-safe — a bad record is dropped, never an ingest error.
+ */
+function recordTerminal(req, sessionId) {
+  if (!sessionId || !isLoopbackAddress(req.socket?.remoteAddress)) return;
+  const terminal = sanitizeTerminal(req.body?.terminal);
+  if (!terminal) return;
+  try {
+    const json = JSON.stringify(terminal);
+    stmts.setSessionTerminal.run(json, sessionId, json);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function isLoopbackAddress(addr) {
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 router.post("/codex", (req, res) => {
   const hookType = req.body?.hook_type || req.body?.event_type || "unknown";
   const data = req.body?.data || req.body || {};
@@ -1424,6 +1447,7 @@ router.post("/codex", (req, res) => {
     try {
       const { ingestCodexHook } = require("../lib/codex-ingest");
       const result = ingestCodexHook(transcriptPath, hookType, data);
+      recordTerminal(req, result?.session?.id || codexHookSessionId(data));
       if (!result?.changed || !result.session) return;
       broadcast(result.created ? "session_created" : "session_updated", result.session);
       if (result.agent) broadcast(result.created ? "agent_created" : "agent_updated", result.agent);
@@ -1459,6 +1483,8 @@ router.post("/event", (req, res) => {
   }
 
   res.json({ ok: true, event: result });
+
+  if (!remotePush) recordTerminal(req, result.session_id || data.session_id);
 
   // Evaluate event-driven alert rules after the ingest transaction committed
   // and the response is on its way — alerting must never slow down or fail

@@ -41,5 +41,13 @@
       "error": "La sesión terminó con un error: un fallo irrecuperable o un error de API upstream finalizó la ejecución.",
       "abandoned": "La sesión quedó inactiva sin una señal de salida limpia. Se marca como abandonada después de más de 5 minutos sin actividad (por ejemplo tras /resume, una caída de red o una CLI terminada). A diferencia de Completada, no se observó una salida real."
     }
+  },
+  "terminal": {
+    "open": "Abrir terminal",
+    "openTitle": "Traer al frente la terminal de esta sesión",
+    "replyPlaceholder": "Responder a esta sesión…",
+    "send": "Enviar respuesta",
+    "sent": "Respuesta enviada",
+    "failed": "Error: {{message}}"
   }
 }

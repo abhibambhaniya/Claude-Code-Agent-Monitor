@@ -37,6 +37,7 @@
  * - `EffectiveSessionStatus` — exported API; see TSDoc on the symbol for behavior.
  * - `Session` — exported API; see TSDoc on the symbol for behavior.
  * - `Agent` — exported API; see TSDoc on the symbol for behavior.
+ * - `AWAITING_GRACE_MS` — exported API; see TSDoc on the symbol for behavior.
  * - `isSessionAwaitingInput` — exported API; see TSDoc on the symbol for behavior.
  * - `isAgentAwaitingInput` — exported API; see TSDoc on the symbol for behavior.
  * - `effectiveAgentStatus` — exported API; see TSDoc on the symbol for behavior.
@@ -44,6 +45,7 @@
  * - `normalizeAwaitingReason` — exported API; see TSDoc on the symbol for behavior.
  * - `sessionAwaitingReason` — exported API; see TSDoc on the symbol for behavior.
  * - `agentAwaitingReason` — exported API; see TSDoc on the symbol for behavior.
+ * - `sessionTerminal` — exported API; see TSDoc on the symbol for behavior.
  * - `DashboardEvent` — exported API; see TSDoc on the symbol for behavior.
  * - `Stats` — exported API; see TSDoc on the symbol for behavior.
  * - `Analytics` — exported API; see TSDoc on the symbol for behavior.
@@ -698,6 +700,9 @@ export interface Session {
    * the server may grow new values; normalize via {@link sessionAwaitingReason}
    * before rendering. Null/absent when the session is not waiting. */
   awaiting_reason?: string | null;
+  /** JSON `{pid, tmux_pane?, tmux_socket?}` from local hooks: where the CLI
+   * runs. Read via {@link sessionTerminal}; null for remote/imported sessions. */
+  terminal?: string | null;
   /** Machine this session was collected from. `"local"` (the default) is this
    * dashboard's own machine; any other value is a remote source id (see the
    * Remote Data Sources feature / `remote_sources`). Maps to `sessions.source`. */
@@ -931,35 +936,70 @@ export interface Agent {
 // agent counts as "blocked on the human" versus merely idle.
 
 /**
+ * How long a turn-end ('stop') or fresh-prompt ('session_start') wait must last
+ * before the row counts as waiting. Claude often stops for a moment and then
+ * carries on (background work, queued prompts), which made cards flicker
+ * Working → Waiting → Working. Permission prompts ('notification') skip the
+ * grace and show as waiting at once, because Claude is blocked on them.
+ */
+export const AWAITING_GRACE_MS = 30_000;
+
+/**
+ * True once a row's awaiting flag has outlived {@link AWAITING_GRACE_MS}, or
+ * at once for a 'notification' wait. An unparseable timestamp counts as
+ * elapsed so a bad value never hides a real wait.
+ */
+function awaitingGraceElapsed(
+  since: string,
+  reason: string | null | undefined,
+  now = Date.now()
+): boolean {
+  if (reason === "notification") return true;
+  const t = Date.parse(since);
+  return Number.isNaN(t) || now - t >= AWAITING_GRACE_MS;
+}
+
+/**
  * True when a session is paused on a permission prompt or input request.
  * @param session The session to check, or a nullish value (returns false).
  * @returns Whether the session is currently active AND has a pending
- *   `awaiting_input_since` timestamp - i.e. blocked on the human, not just idle.
+ *   `awaiting_input_since` timestamp past the grace period - i.e. blocked on
+ *   the human, not just idle between steps.
  */
 export function isSessionAwaitingInput(session: Session | undefined | null): boolean {
-  return !!session?.awaiting_input_since && session.status === "active";
+  return (
+    !!session?.awaiting_input_since &&
+    session.status === "active" &&
+    awaitingGraceElapsed(session.awaiting_input_since, session.awaiting_reason)
+  );
 }
 
 /**
  * True when an agent is the one blocked on user input (typically a main agent).
  * @param agent The agent to check, or a nullish value (returns false).
- * @returns Whether `awaiting_input_since` is set and the agent hasn't already
- *   reached a terminal status (a stale flag on a finished agent is ignored).
+ * @returns Whether `awaiting_input_since` is set past the grace period and the
+ *   agent hasn't already reached a terminal status (a stale flag on a finished
+ *   agent is ignored).
  */
 export function isAgentAwaitingInput(agent: Agent | undefined | null): boolean {
   if (!agent?.awaiting_input_since) return false;
   // Once the agent's lifecycle has ended, the waiting flag is stale; ignore it.
-  return agent.status !== "completed" && agent.status !== "error";
+  if (agent.status === "completed" || agent.status === "error") return false;
+  return awaitingGraceElapsed(agent.awaiting_input_since, agent.awaiting_reason);
 }
 
 /** Overlays {@link AWAITING_STATUS} on top of `agent.status` when the agent is
  *  blocked on user input; otherwise passes the persisted status through unchanged.
+ *  A main agent that Stop marked `waiting` reads as `working` while its awaiting
+ *  flag is still inside {@link AWAITING_GRACE_MS}.
  *
  * @param agent - Agent row.
  * @returns `waiting` while awaiting input, otherwise the stored status.
  */
 export function effectiveAgentStatus(agent: Agent): EffectiveAgentStatus {
-  return isAgentAwaitingInput(agent) ? AWAITING_STATUS : agent.status;
+  if (isAgentAwaitingInput(agent)) return AWAITING_STATUS;
+  if (agent.status === "waiting" && agent.awaiting_input_since) return "working";
+  return agent.status;
 }
 
 /** Overlays {@link AWAITING_STATUS} on top of `session.status` when the session
@@ -1009,6 +1049,23 @@ export function sessionAwaitingReason(session: Session | undefined | null): Awai
 export function agentAwaitingReason(agent: Agent | undefined | null): AwaitingReason | null {
   if (!agent || !isAgentAwaitingInput(agent)) return null;
   return normalizeAwaitingReason(agent.awaiting_reason);
+}
+
+/**
+ * What the dashboard can reach of the session's terminal, from its `terminal`
+ * record: null when there is none, else whether it runs inside tmux (needed
+ * for the reply box; focusing works either way).
+ *
+ * @param session - Session row.
+ */
+export function sessionTerminal(session: Session): { tmux: boolean } | null {
+  if (!session.terminal) return null;
+  try {
+    const parsed = JSON.parse(session.terminal) as { tmux_pane?: unknown };
+    return { tmux: typeof parsed.tmux_pane === "string" };
+  } catch {
+    return null;
+  }
 }
 
 // ───── Events ─────

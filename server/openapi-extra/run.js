@@ -7,7 +7,8 @@
  *
  * Merged into the base spec by `server/openapi-extra.js` -> `createOpenApiSpec()`.
  * Exports exactly `{ tags, schemas, paths }`. Every schema name is prefixed
- * `Run`. The shared error envelope `ErrorResponse` (`{ error: { code, message } }`)
+ * `Run`, except the `Terminal*` schemas for the `/api/terminal` routes
+ * (`server/routes/terminal.js`), which share this file's loopback guard. The shared error envelope `ErrorResponse` (`{ error: { code, message } }`)
  * is defined in the base spec and only referenced here — never redefined.
  *
  * @author Son Nguyen <hoangson091104@gmail.com>
@@ -18,6 +19,11 @@ const tags = [
     name: "Run",
     description:
       "Spawn and supervise Claude Code or interactive Codex runs from the dashboard, stream output over WebSocket, and manage run history",
+  },
+  {
+    name: "Terminal",
+    description:
+      "Reach the terminal a live local session runs in: focus its tmux pane and terminal app, or type a reply into its tmux pane",
   },
 ];
 
@@ -41,7 +47,50 @@ const ebadOrigin403 = {
   },
 };
 
+const terminalSessionParam = {
+  name: "sessionId",
+  in: "path",
+  required: true,
+  schema: { type: "string" },
+  description: "Session id.",
+};
+
+/** Error response fragment for the /api/terminal routes. */
+function terminalError(description, code, message) {
+  return {
+    description,
+    content: {
+      "application/json": {
+        schema: { $ref: "#/components/schemas/ErrorResponse" },
+        example: { error: { code, message } },
+      },
+    },
+  };
+}
+
 const schemas = {
+  TerminalFocusResponse: {
+    type: "object",
+    required: ["ok", "tmux", "attached", "app"],
+    properties: {
+      ok: { type: "boolean" },
+      tmux: { type: "boolean", description: "Whether the session runs inside tmux." },
+      attached: {
+        type: "boolean",
+        description: "False when the tmux pane was selected but no client is attached to show it.",
+      },
+      app: {
+        type: "string",
+        nullable: true,
+        description: "Name of the terminal app raised (macOS), or null.",
+      },
+    },
+  },
+  TerminalInputResponse: {
+    type: "object",
+    required: ["ok", "sent"],
+    properties: { ok: { type: "boolean" }, sent: { type: "boolean" } },
+  },
   RunProvider: {
     type: "string",
     enum: ["claude", "codex"],
@@ -1240,6 +1289,89 @@ const paths = {
             },
           },
         },
+      },
+    },
+  },
+
+  "/api/terminal/{sessionId}/focus": {
+    post: {
+      tags: ["Terminal"],
+      summary: "Bring a session's terminal to the front",
+      description:
+        "Inside tmux: selects the session's window and pane, switches an attached tmux client to it, and (macOS) raises the terminal app hosting that client. Outside tmux: raises the terminal app hosting the CLI process (macOS only). Brings the app forward, not a specific tab. Requires an active session with a terminal record from local hooks. The loopback same-origin guard applies.",
+      operationId: "terminalFocus",
+      parameters: [terminalSessionParam],
+      responses: {
+        200: {
+          description:
+            "Focused. `attached` is false when no tmux client is attached; `app` is the raised app name, or null.",
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/TerminalFocusResponse" },
+              example: { ok: true, tmux: true, attached: true, app: "Ghostty" },
+            },
+          },
+        },
+        403: ebadOrigin403,
+        404: terminalError("Session not found (NOT_FOUND)", "NOT_FOUND", "session not found"),
+        409: terminalError(
+          "Not reachable: session inactive (ENOTACTIVE), no terminal record (ENOTERMINAL), or tmux pane gone (EPANEGONE)",
+          "ENOTERMINAL",
+          "no terminal recorded for this session"
+        ),
+        501: terminalError(
+          "tmux or ps is not installed (ENOTOOL)",
+          "ENOTOOL",
+          "tmux is not installed"
+        ),
+      },
+    },
+  },
+
+  "/api/terminal/{sessionId}/input": {
+    post: {
+      tags: ["Terminal"],
+      summary: "Type a reply into a session's tmux pane",
+      description:
+        "Pastes `text` into the session's tmux pane (bracketed paste, so multi-line text stays one message) and presses Enter. SIDE EFFECT: the CLI receives the text as user input. Refused unless the pane still runs the session's CLI: the pane's foreground command must not be a shell (EPANESHELL) and the recorded CLI pid must live in that pane (EPANEMISMATCH). Text is 1-4000 characters with no control characters other than newline and tab. tmux only. The loopback same-origin guard applies.",
+      operationId: "terminalInput",
+      parameters: [terminalSessionParam],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["text"],
+              properties: { text: { type: "string", minLength: 1, maxLength: 4000 } },
+            },
+            example: { text: "yes, go ahead" },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Text delivered and Enter pressed.",
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/TerminalInputResponse" },
+              example: { ok: true, sent: true },
+            },
+          },
+        },
+        400: terminalError("Invalid text (INVALID_INPUT)", "INVALID_INPUT", "text is required"),
+        403: ebadOrigin403,
+        404: terminalError("Session not found (NOT_FOUND)", "NOT_FOUND", "session not found"),
+        409: terminalError(
+          "Not deliverable: ENOTACTIVE, ENOTERMINAL, ENOTMUX, EPANEGONE, EPANESHELL, or EPANEMISMATCH",
+          "EPANESHELL",
+          "the session's CLI is no longer running in that pane"
+        ),
+        501: terminalError(
+          "tmux or ps is not installed (ENOTOOL)",
+          "ENOTOOL",
+          "tmux is not installed"
+        ),
       },
     },
   },

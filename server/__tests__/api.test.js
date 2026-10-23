@@ -105,6 +105,8 @@ const EXPECTED_API_PATHS = [
   "/api/run/cwds",
   "/api/run/files",
   "/api/run/binary",
+  "/api/terminal/{sessionId}/focus",
+  "/api/terminal/{sessionId}/input",
   "/api/run/models",
   "/api/run/{id}",
   "/api/run/{id}/message",

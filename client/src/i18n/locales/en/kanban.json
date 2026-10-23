@@ -41,5 +41,13 @@
       "error": "Session ended with an error — an unrecoverable failure or an upstream API error terminated the run.",
       "abandoned": "Session went stale without a clean exit signal. Marked abandoned after 5+ minutes of no activity (for example after /resume, a network drop, or a killed CLI). Distinct from Completed: no real exit was observed."
     }
+  },
+  "terminal": {
+    "open": "Open terminal",
+    "openTitle": "Bring this session's terminal to the front",
+    "replyPlaceholder": "Reply to this session…",
+    "send": "Send reply",
+    "sent": "Reply sent",
+    "failed": "Failed: {{message}}"
   }
 }

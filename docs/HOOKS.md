@@ -149,6 +149,8 @@ graph TB
     style FastExec fill:#10B981
 ```
 
+**Terminal record:** besides `{ hook_type, data }`, both handlers (`scripts/hook-handler.js`, `scripts/codex-hook-handler.js`) send `terminal: { pid, tmux_pane?, tmux_socket? }`. `pid` is the handler's parent, the CLI process; inside tmux, `tmux_pane` is `$TMUX_PANE` and `tmux_socket` is the first field of `$TMUX`. The server stores it on `sessions.terminal` only for hooks from this machine (loopback), and the Kanban cards use it for **Open terminal** and the tmux reply box (`/api/terminal`, see [API.md](API.md#terminal-apiterminal)). Reading these values costs no subprocess, so the hook stays fast.
+
 ---
 
 ## Hook Installation
@@ -481,7 +483,7 @@ Triggered when Claude finishes a turn (NOT when the session is closed).
 ```
 
 **Purpose:**
-- Non-error: set main agent to `idle` and stamp `awaiting_input_since` (with `awaiting_reason` = `stop`) — Claude finished its turn, ball is in the user's court. The session shows as **Waiting** until `UserPromptSubmit` / `PreToolUse` fires
+- Non-error: set main agent to `idle` and stamp `awaiting_input_since` (with `awaiting_reason` = `stop`) — Claude finished its turn, ball is in the user's court. The session shows as **Waiting** (after a 30-second UI grace period, `AWAITING_GRACE_MS`) until `UserPromptSubmit` / `PreToolUse` fires
 - Error (`stop_reason="error"`): drop `awaiting_input_since` (and `awaiting_reason`, cleared to NULL together), mark the session `error`
 - Background subagents continue running — they complete individually via `SubagentStop`, never via `Stop`
 

@@ -1741,6 +1741,23 @@ export const api = {
       }),
   },
 
+  // ──────────────────────────────── Terminal API ──────────────────────────────
+  /** Reach a live local session's terminal. Maps to `server/routes/terminal.js`. */
+  terminal: {
+    /** POST /api/terminal/:id/focus - select the session's tmux pane and raise its terminal app. */
+    focus: (sessionId: string) =>
+      request<{ ok: boolean; tmux: boolean; attached: boolean; app: string | null }>(
+        `/terminal/${encodeURIComponent(sessionId)}/focus`,
+        { method: "POST" }
+      ),
+    /** POST /api/terminal/:id/input - type `text` into the session's tmux pane and press Enter. */
+    input: (sessionId: string, text: string) =>
+      request<{ ok: boolean; sent: boolean }>(`/terminal/${encodeURIComponent(sessionId)}/input`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }),
+  },
+
   // ────────────────────────────────── Run API ─────────────────────────────────
   /** Spawn/manage Claude Code processes and interactive Codex app-server
    * threads launched from the dashboard's Run Agent page. */

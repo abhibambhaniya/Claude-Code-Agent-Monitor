@@ -79,8 +79,8 @@ import { CardSkeleton } from "../components/Skeleton";
 import {
   STATUS_CONFIG,
   SESSION_STATUS_CONFIG,
-  isAgentAwaitingInput,
-  isSessionAwaitingInput,
+  effectiveAgentStatus,
+  effectiveSessionStatus,
 } from "../lib/types";
 import type {
   Agent,
@@ -260,17 +260,20 @@ export function KanbanBoard() {
     return map;
   }, [sessions]);
 
-  // Bucket by effective status: agents with status "waiting" OR those with
-  // awaiting_input_since set go into the "waiting" column. Other columns
-  // exclude agents that belong in "waiting".
-  const isEffectivelyWaiting = (a: Agent) => a.status === "waiting" || isAgentAwaitingInput(a);
+  // Re-bucket every few seconds so a card moves to Waiting once its awaiting
+  // flag outlives AWAITING_GRACE_MS, even when no new event arrives.
+  const [, setGraceTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setGraceTick((n) => n + 1), 5000);
+    return () => window.clearInterval(id);
+  }, []);
 
+  // Bucket by effective status: rows awaiting input past the grace period go
+  // into the "waiting" column; a stopped main agent still inside the grace
+  // period stays in "working".
   const groupedAgents = AGENT_COLUMNS.reduce(
     (acc, status) => {
-      acc[status] =
-        status === "waiting"
-          ? agents.filter(isEffectivelyWaiting)
-          : agents.filter((a) => a.status === status && !isEffectivelyWaiting(a));
+      acc[status] = agents.filter((a) => effectiveAgentStatus(a) === status);
       return acc;
     },
     {} as Record<EffectiveAgentStatus, Agent[]>
@@ -278,10 +281,7 @@ export function KanbanBoard() {
 
   const groupedSessions = SESSION_COLUMNS.reduce(
     (acc, status) => {
-      acc[status] =
-        status === "waiting"
-          ? sessions.filter(isSessionAwaitingInput)
-          : sessions.filter((s) => s.status === status && !isSessionAwaitingInput(s));
+      acc[status] = sessions.filter((s) => effectiveSessionStatus(s) === status);
       return acc;
     },
     {} as Record<EffectiveSessionStatus, Session[]>

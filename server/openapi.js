@@ -361,6 +361,12 @@ function createOpenApiSpec() {
             },
             model: { type: "string", nullable: true },
             provider: { type: "string", enum: ["claude", "cursor", "codex"] },
+            terminal: {
+              type: "string",
+              nullable: true,
+              description:
+                "JSON-encoded `{pid, tmux_pane?, tmux_socket?}` reported by local hooks: the CLI's process id and, inside tmux, its pane. Enables the `/api/terminal` focus and reply actions. NULL for remote, imported, and pre-existing sessions.",
+            },
             started_at: { type: "string", format: "date-time" },
             ended_at: { type: "string", format: "date-time", nullable: true },
             metadata: {

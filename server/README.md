@@ -788,6 +788,15 @@ The Agent Config page also includes a **Codex configuration workspace**. It disc
 | `DELETE` | `/api/codex-config/file` | Back up then delete a user-managed profile/hook/rule/skill/instruction; `config.toml` is rejected |
 | `POST` | `/api/codex-config/profiles` | Create a non-overwriting named `<name>.config.toml` overlay for `codex --profile <name>` |
 
+### Terminal (`/api/terminal`)
+
+Focus or reply to a live local session's terminal (`routes/terminal.js` over `lib/terminal-control.js`). Uses the hook-reported `sessions.terminal` record (`{pid, tmux_pane?, tmux_socket?}`, stored only for loopback hooks) and the Run Agent loopback-Origin guard. All commands run via `execFile`, never a shell.
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `POST` | `/api/terminal/:sessionId/focus` | Select the session's tmux window/pane, switch an attached client, raise the terminal app (macOS) |
+| `POST` | `/api/terminal/:sessionId/input` | `{ text }` → bracketed paste into the tmux pane, then Enter. Refused if the pane is back at a shell or no longer hosts the recorded CLI pid |
+
 ### Run Agent (`/api/run`)
 
 Provider-aware HTTP surface for spawning and supervising Claude Code processes and native interactive Codex threads from the dashboard. Every route enforces a same-origin / loopback-Origin guard against browser CSRF. A supplied `cwd` must be an existing absolute directory and is canonicalized with `realpath`; it intentionally may be outside this repository so users can launch from their home directory or any recent project.

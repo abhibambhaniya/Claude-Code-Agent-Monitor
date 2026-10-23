@@ -312,7 +312,7 @@ El panel cubre todo el ciclo de vida de los agentes locales. Los contratos opera
 | --- | --- |
 | **Progreso de tareas** | Progreso por propietario a partir de las herramientas de tareas de Claude, el `TodoWrite` heredado y `update_plan` de Codex. Las tarjetas y filas muestran vistas previas compactas. Detalles de la sesión añade segmentos de estado, trabajo activo, propietarios y paginación de 10 filas. El trabajo principal nuevo elimina el estado incompleto obsoleto, mientras que se conserva el historial completado. |
 | **Panel** | Las pestañas persistentes **Monitor** y **Salud** combinan totales del conjunto, jerarquías activas, actividad reciente, estado ponderado de éxito, caché, errores y heap, almacenamiento, herramientas, modelos, eficacia de subagentes y métricas de compactación. Salud se actualiza cada 5 segundos desde `/api/settings/info` y `/api/workflows`. |
-| **Tablero Kanban** | Las columnas de agentes cubren Trabajando, En espera, Completados y Error. Las columnas de sesiones añaden Activas y Abandonadas. Las tarjetas se paginan de 10 en 10, se suscriben solo a la vista WebSocket activa, conservan los títulos completos y explican motivos de espera como permisos, fin de turno, inactividad en el prompt o interrupción. |
+| **Tablero Kanban** | Las columnas de agentes cubren Trabajando, En espera, Completados y Error. Las columnas de sesiones añaden Activas y Abandonadas. Las tarjetas se paginan de 10 en 10, se suscriben solo a la vista WebSocket activa, conservan los títulos completos y explican motivos de espera como permisos, fin de turno, inactividad en el prompt o interrupción. Las tarjetas de sesiones locales activas incluyen **Abrir terminal**, que selecciona el panel tmux de la sesión y trae al frente la app de terminal (macOS). Mientras una sesión espera dentro de tmux, un cuadro de respuesta escribe directamente en su panel. |
 | **Sesiones** | Historial con búsqueda, filtros y paginación del servidor, cálculo del costo de la página visible y una fila temporal en memoria para el inicio de Codex. La búsqueda cubre `id`, `name` y `cwd` con un debounce de 300 ms. Los nombres se obtienen del título explícito, el título de IA y, por último, el primer prompt relevante del usuario. |
 | **Detalles de la sesión** | Estadísticas en vivo, trabajo activo, uso de herramientas, subagentes, tokens, jerarquía, cronologías filtradas, agrupación por `tool_use_id` y renderizadores específicos por herramienta. La vista Conversación muestra turnos en cola, avisos del sistema, Markdown, código resaltado y herramientas con estilo. Los avisos de espera muestran el motivo y el tiempo transcurrido. |
 | **Feed de Actividad** | Eventos en tiempo real que se pueden pausar, con filtros compartidos, paginación del servidor, agrupación, origen por proyecto, sesión o subagente, enlaces a sesiones e insignias de estado coherentes para Claude y Codex. |
@@ -561,7 +561,11 @@ stateDiagram-v2
 
 Estados persistentes: `activo | completado | error | abandonado`. el
 El estado de la sesión **esperando** es una superposición de interfaz de usuario (estado=`activo` con
-`awaiting_input_since` establecido).
+`awaiting_input_since` establecido). Una espera `stop` o `session_start` solo se
+muestra **En espera** tras 30 segundos (`AWAITING_GRACE_MS` en
+`client/src/lib/types.ts`); hasta entonces la fila sigue activa/trabajando, así
+que un turno que termina y continúa enseguida no parpadea. Una espera
+`notification` (solicitud de permiso) se muestra **En espera** de inmediato.
 
 ```mermaid
 stateDiagram-v2

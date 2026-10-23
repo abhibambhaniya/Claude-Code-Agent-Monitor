@@ -39,6 +39,20 @@ function resolvePorts() {
 
 const ports = resolvePorts();
 
+/**
+ * Where this session's CLI runs, so the dashboard can focus its terminal or
+ * type a reply into it. Hooks inherit Claude Code's environment, so `$TMUX_PANE`
+ * names the session's own pane and our parent pid is the CLI process.
+ */
+function terminalInfo() {
+  const info = { pid: process.ppid };
+  if (process.env.TMUX && process.env.TMUX_PANE) {
+    info.tmux_pane = process.env.TMUX_PANE;
+    info.tmux_socket = process.env.TMUX.split(",")[0];
+  }
+  return info;
+}
+
 let input = "";
 
 process.stdin.setEncoding("utf8");
@@ -54,6 +68,7 @@ process.stdin.on("end", () => {
   const payload = {
     hook_type: hookType,
     data: parsedData,
+    terminal: terminalInfo(),
   };
 
   // Give the kernel one tick to hand the buffered request bytes to the local

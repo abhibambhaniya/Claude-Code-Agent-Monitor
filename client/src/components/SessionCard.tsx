@@ -60,6 +60,7 @@
  * ----------------------------------------------------------------------------- */
 
 import { useTranslation } from "react-i18next";
+import { TerminalActions } from "./TerminalActions";
 import { useNavigate } from "react-router";
 import { FolderOpen, Bot, Clock, Coins, Cpu } from "lucide-react";
 import { SessionStatusBadge } from "./StatusBadge";
@@ -262,6 +263,7 @@ export function SessionCard({ session, onClick, statusDisplay = "badge" }: Sessi
           {timeAgo(session.ended_at || lastActivity)}
         </span>
       </div>
+      <TerminalActions session={session} waiting={isWaiting} />
     </div>
   );
 }
