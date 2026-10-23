@@ -23,7 +23,7 @@ const tags = [
   {
     name: "Terminal",
     description:
-      "Reach the terminal a live local session runs in: focus its tmux pane and terminal app, or type a reply into its tmux pane",
+      "Reach the terminal a live local session runs in: focus its tmux pane and terminal app, or type a reply into its tmux pane or Ghostty surface",
   },
 ];
 
@@ -1336,9 +1336,9 @@ const paths = {
   "/api/terminal/{sessionId}/input": {
     post: {
       tags: ["Terminal"],
-      summary: "Type a reply into a session's tmux pane",
+      summary: "Type a reply into a session's tmux pane or Ghostty surface",
       description:
-        "Pastes `text` into the session's tmux pane (bracketed paste, so multi-line text stays one message) and presses Enter. SIDE EFFECT: the CLI receives the text as user input. Refused unless the pane still runs the session's CLI: the pane's foreground command must not be a shell (EPANESHELL) and the recorded CLI pid must live in that pane (EPANEMISMATCH). Text is 1-4000 characters with no control characters other than newline and tab. tmux only. The loopback same-origin guard applies.",
+        "Pastes `text` into the session's tmux pane (bracketed paste, so multi-line text stays one message) and presses Enter. SIDE EFFECT: the CLI receives the text as user input. Refused unless the pane still runs the session's CLI: the pane's foreground command must not be a shell (EPANESHELL) and the recorded CLI pid must live in that pane (EPANEMISMATCH). Text is 1-4000 characters with no control characters other than newline and tab. Outside tmux, a CLI running straight in Ghostty (macOS) gets the text through Ghostty's AppleScript `input text` (pasted) and `send key \"enter\"`, delivered only to the surface on the CLI's tty (found with the same OSC 2 title marker as focus, without changing focus). The CLI's hold on that tty is re-checked right before the paste and before Enter. It is refused when the tty's foreground process is a shell (EPANESHELL); when the CLI's process group is not in the foreground, or the pid started after the last hook that reported it (the handler-stamped `seen_at`) and so was reused (EPANEMISMATCH); or when the surface is not found (ENOSURFACE). Any other terminal gets ENOTMUX. The loopback same-origin guard applies.",
       operationId: "terminalInput",
       parameters: [terminalSessionParam],
       requestBody: {
@@ -1368,7 +1368,7 @@ const paths = {
         403: ebadOrigin403,
         404: terminalError("Session not found (NOT_FOUND)", "NOT_FOUND", "session not found"),
         409: terminalError(
-          "Not deliverable: ENOTACTIVE, ENOTERMINAL, ENOTMUX, EPANEGONE, EPANESHELL, or EPANEMISMATCH",
+          "Not deliverable: ENOTACTIVE, ENOTERMINAL, ENOTMUX, EPANEGONE, EPANESHELL, EPANEMISMATCH, or ENOSURFACE",
           "EPANESHELL",
           "the session's CLI is no longer running in that pane"
         ),

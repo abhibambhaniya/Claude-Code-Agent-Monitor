@@ -54,6 +54,25 @@ describe("terminal record ingestion", () => {
     });
   });
 
+  it("keeps the handler's seen_at on Ghostty records, clamped to receipt", async () => {
+    const stored = async (id, seenAt) => {
+      await post("/api/hooks/event", {
+        hook_type: "SessionStart",
+        data: { session_id: id, cwd: "/tmp", source: "startup" },
+        terminal: { pid: 4243, ghostty: true, seen_at: seenAt },
+      });
+      return JSON.parse(stmts.getSession.get(id).terminal);
+    };
+    // Ingested late: the handler's own time stands, not the receipt time.
+    const sent = Date.now() - 30_000;
+    assert.equal((await stored("term-g1", sent)).seen_at, new Date(sent).toISOString());
+    const before = Date.now();
+    const future = await stored("term-g2", Date.now() + 3_600_000);
+    assert.ok(Date.parse(future.seen_at) >= before && Date.parse(future.seen_at) <= Date.now());
+    assert.deepEqual(await stored("term-g3", "soon"), { pid: 4243, ghostty: true });
+    assert.deepEqual(await stored("term-g4", { toString: null }), { pid: 4243, ghostty: true });
+  });
+
   it("ignores a malformed record", async () => {
     await post("/api/hooks/event", {
       hook_type: "SessionStart",

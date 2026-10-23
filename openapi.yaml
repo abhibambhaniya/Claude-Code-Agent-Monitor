@@ -60,7 +60,7 @@ tags:
   - name: Run
     description: Spawn and supervise Claude Code or interactive Codex runs from the dashboard, stream output over WebSocket, and manage run history
   - name: Terminal
-    description: 'Reach the terminal a live local session runs in: focus its tmux pane and terminal app, or type a reply into its tmux pane'
+    description: 'Reach the terminal a live local session runs in: focus its tmux pane and terminal app, or type a reply into its tmux pane or Ghostty surface'
   - name: Push
     description: Web Push notification subscriptions and broadcast (VAPID); also fires native Electron notifications when hosted in the desktop app
 components:
@@ -10634,8 +10634,8 @@ paths:
     post:
       tags:
         - Terminal
-      summary: Type a reply into a session's tmux pane
-      description: 'Pastes `text` into the session''s tmux pane (bracketed paste, so multi-line text stays one message) and presses Enter. SIDE EFFECT: the CLI receives the text as user input. Refused unless the pane still runs the session''s CLI: the pane''s foreground command must not be a shell (EPANESHELL) and the recorded CLI pid must live in that pane (EPANEMISMATCH). Text is 1-4000 characters with no control characters other than newline and tab. tmux only. The loopback same-origin guard applies.'
+      summary: Type a reply into a session's tmux pane or Ghostty surface
+      description: 'Pastes `text` into the session''s tmux pane (bracketed paste, so multi-line text stays one message) and presses Enter. SIDE EFFECT: the CLI receives the text as user input. Refused unless the pane still runs the session''s CLI: the pane''s foreground command must not be a shell (EPANESHELL) and the recorded CLI pid must live in that pane (EPANEMISMATCH). Text is 1-4000 characters with no control characters other than newline and tab. Outside tmux, a CLI running straight in Ghostty (macOS) gets the text through Ghostty''s AppleScript `input text` (pasted) and `send key "enter"`, delivered only to the surface on the CLI''s tty (found with the same OSC 2 title marker as focus, without changing focus). The CLI''s hold on that tty is re-checked right before the paste and before Enter. It is refused when the tty''s foreground process is a shell (EPANESHELL); when the CLI''s process group is not in the foreground, or the pid started after the last hook that reported it (the handler-stamped `seen_at`) and so was reused (EPANEMISMATCH); or when the surface is not found (ENOSURFACE). Any other terminal gets ENOTMUX. The loopback same-origin guard applies.'
       operationId: terminalInput
       parameters:
         - name: sessionId
@@ -10700,7 +10700,7 @@ paths:
                   code: NOT_FOUND
                   message: session not found
         '409':
-          description: 'Not deliverable: ENOTACTIVE, ENOTERMINAL, ENOTMUX, EPANEGONE, EPANESHELL, or EPANEMISMATCH'
+          description: 'Not deliverable: ENOTACTIVE, ENOTERMINAL, ENOTMUX, EPANEGONE, EPANESHELL, EPANEMISMATCH, or ENOSURFACE'
           content:
             application/json:
               schema:

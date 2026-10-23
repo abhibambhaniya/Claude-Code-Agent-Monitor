@@ -1406,7 +1406,7 @@ function codexTranscriptPath(data) {
 // simultaneous watcher notification by byte cursor and broadcasts the same
 // frames as Claude hooks once processing completes.
 /**
- * Store where a session's CLI runs (pid + tmux pane) from the hook envelope's
+ * Store where a session's CLI runs (pid + tmux pane or Ghostty flag) from the hook envelope's
  * `terminal` field. Only for hooks sent from this machine: a pane or pid from
  * another host would point the focus / reply actions at an unrelated local
  * process. Fail-safe — a bad record is dropped, never an ingest error.
@@ -1415,6 +1415,14 @@ function recordTerminal(req, sessionId) {
   if (!sessionId || !isLoopbackAddress(req.socket?.remoteAddress)) return;
   const terminal = sanitizeTerminal(req.body?.terminal);
   if (!terminal) return;
+  // When the handler ran, the CLI (its parent) was alive with this pid;
+  // Ghostty replies refuse a process that started later (pid reuse). The
+  // handler's clock is used, not receipt time, so a hook ingested late still
+  // dates the live CLI; it is clamped to receipt and omitted when absent.
+  const sentAt = req.body.terminal.seen_at;
+  if (terminal.ghostty && typeof sentAt === "number" && Number.isFinite(sentAt) && sentAt > 0) {
+    terminal.seen_at = new Date(Math.min(sentAt, Date.now())).toISOString();
+  }
   try {
     const json = JSON.stringify(terminal);
     stmts.setSessionTerminal.run(json, sessionId, json);

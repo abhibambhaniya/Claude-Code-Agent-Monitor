@@ -1754,7 +1754,7 @@ export const api = {
         app: string | null;
         exact: boolean;
       }>(`/terminal/${encodeURIComponent(sessionId)}/focus`, { method: "POST" }),
-    /** POST /api/terminal/:id/input - type `text` into the session's tmux pane and press Enter. */
+    /** POST /api/terminal/:id/input - type `text` into the session's tmux pane (or Ghostty surface) and press Enter. */
     input: (sessionId: string, text: string) =>
       request<{ ok: boolean; sent: boolean }>(`/terminal/${encodeURIComponent(sessionId)}/input`, {
         method: "POST",

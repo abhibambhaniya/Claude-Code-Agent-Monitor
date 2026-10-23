@@ -33,6 +33,9 @@ process.stdin.on("end", () => {
   if (process.env.TMUX && process.env.TMUX_PANE) {
     terminal.tmux_pane = process.env.TMUX_PANE;
     terminal.tmux_socket = process.env.TMUX.split(",")[0];
+  } else if (process.platform === "darwin" && process.env.TERM_PROGRAM === "ghostty") {
+    terminal.ghostty = true;
+    terminal.seen_at = Date.now(); // the CLI (our parent) is alive now; see hook-handler.js
   }
   sendHook(resolvePorts, "/api/hooks/codex", { hook_type: hookType, data, terminal }).finally(() =>
     setImmediate(() => process.exit(0))
