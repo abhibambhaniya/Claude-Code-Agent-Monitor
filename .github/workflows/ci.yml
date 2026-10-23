@@ -171,10 +171,13 @@ jobs:
     name: "🍎 macOS Desktop (DMG)"
     runs-on: macos-latest
     needs: [build, changes]
+    # Fork policy: desktop builds, deploy validation, image publishing and
+    # releases run only on the upstream repo; forks keep format/test/build.
     if: |
+      github.repository == 'hoangsonww/Claude-Code-Agent-Monitor' && (
       github.event_name == 'push' ||
       needs.changes.outputs.desktop == 'true' ||
-      contains(toJSON(github.event.pull_request.labels.*.name), 'desktop')
+      contains(toJSON(github.event.pull_request.labels.*.name), 'desktop'))
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -291,10 +294,13 @@ jobs:
     name: "🪟 Windows Desktop (EXE)"
     runs-on: windows-latest
     needs: [build, changes]
+    # Fork policy: desktop builds, deploy validation, image publishing and
+    # releases run only on the upstream repo; forks keep format/test/build.
     if: |
+      github.repository == 'hoangsonww/Claude-Code-Agent-Monitor' && (
       github.event_name == 'push' ||
       needs.changes.outputs.desktop == 'true' ||
-      contains(toJSON(github.event.pull_request.labels.*.name), 'desktop')
+      contains(toJSON(github.event.pull_request.labels.*.name), 'desktop'))
     defaults:
       run:
         # Git Bash ships on windows-latest; using it lets the `cd a && b` steps
@@ -405,6 +411,7 @@ jobs:
     name: "☁️ Validate Deployment Stack (advisory)"
     runs-on: ubuntu-latest
     needs: test
+    if: github.repository == 'hoangsonww/Claude-Code-Agent-Monitor'
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -430,6 +437,7 @@ jobs:
     name: "🐳 OCI Supply Chain"
     runs-on: ubuntu-latest
     needs: [test, build, deployment]
+    if: github.repository == 'hoangsonww/Claude-Code-Agent-Monitor'
     permissions:
       contents: read
       packages: write
@@ -563,6 +571,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [desktop, desktop-win, docker]
     if: |
+      github.repository == 'hoangsonww/Claude-Code-Agent-Monitor' &&
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     permissions:
