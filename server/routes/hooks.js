@@ -1419,8 +1419,8 @@ function recordTerminal(req, sessionId) {
   // Ghostty replies refuse a process that started later (pid reuse). The
   // handler's clock is used, not receipt time, so a hook ingested late still
   // dates the live CLI; it is clamped to receipt and omitted when absent.
-  const sentAt = Number(req.body.terminal.seen_at);
-  if (terminal.ghostty && Number.isFinite(sentAt) && sentAt > 0) {
+  const sentAt = req.body.terminal.seen_at;
+  if (terminal.ghostty && typeof sentAt === "number" && Number.isFinite(sentAt) && sentAt > 0) {
     terminal.seen_at = new Date(Math.min(sentAt, Date.now())).toISOString();
   }
   try {
