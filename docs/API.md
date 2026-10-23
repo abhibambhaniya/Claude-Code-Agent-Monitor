@@ -1537,11 +1537,11 @@ DELETE /api/run/:id                   Stop (SIGTERM → SIGKILL after 5 s)
 Reach the terminal a live local session runs in. The hook handlers send a `terminal` record (`{pid, tmux_pane?, tmux_socket?}`) with each hook; the server stores it on `sessions.terminal` only for hooks from this machine (loopback). Both routes share the Run Agent loopback-Origin guard and require an `active` session with a record.
 
 ```
-POST   /api/terminal/:sessionId/focus  Select the tmux window/pane, switch an attached client to it, raise the terminal app (macOS) → { ok, tmux, attached, app }
+POST   /api/terminal/:sessionId/focus  Select the tmux window/pane, switch an attached client to it, raise the terminal app (macOS) → { ok, tmux, attached, app, exact }
 POST   /api/terminal/:sessionId/input  Body: { text } — paste into the tmux pane (bracketed paste), then Enter → { ok, sent }
 ```
 
-`input` is tmux-only (`ENOTMUX` otherwise). It is refused when the pane's foreground command is a shell (`EPANESHELL`, the CLI has exited) or the recorded CLI pid no longer lives in that pane (`EPANEMISMATCH`). Text is 1-4000 characters with no control characters other than newline and tab. Other errors: `NOT_FOUND` (404), `ENOTACTIVE` / `ENOTERMINAL` / `EPANEGONE` (409), `ENOTOOL` (501, `tmux` missing). Outside tmux, `focus` only raises the app hosting the CLI process (macOS); it brings the app forward, not a specific tab.
+`input` is tmux-only (`ENOTMUX` otherwise). It is refused when the pane's foreground command is a shell (`EPANESHELL`, the CLI has exited) or the recorded CLI pid no longer lives in that pane (`EPANEMISMATCH`). Text is 1-4000 characters with no control characters other than newline and tab. Other errors: `NOT_FOUND` (404), `ENOTACTIVE` / `ENOTERMINAL` / `EPANEGONE` (409), `ENOTOOL` (501, `tmux` missing). Outside tmux, `focus` raises the app hosting the CLI process (macOS). When that app (or the app hosting the tmux client) is Ghostty, `focus` targets the exact window, tab and split: it snapshots Ghostty's terminal titles via AppleScript, writes a unique OSC 2 title to the session's tty (the CLI's tty, or the tmux client's `client_tty`), focuses the surface showing that title (polled for up to ~1 s), then restores the previous title, and returns `exact: true`. Other apps, a missing macOS Automation permission for Ghostty, or any failure there fall back to raising the app (`exact: false`).
 
 Spawned `claude` processes fire the dashboard's hooks like any other CLI session, so they show up in `/api/sessions`, the analytics, the Kanban board, and the Workflows page automatically — the Run page itself just owns the live streaming UX.
 

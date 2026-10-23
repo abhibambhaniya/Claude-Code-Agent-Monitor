@@ -794,7 +794,7 @@ Focus or reply to a live local session's terminal (`routes/terminal.js` over `li
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |
-| `POST` | `/api/terminal/:sessionId/focus` | Select the session's tmux window/pane, switch an attached client, raise the terminal app (macOS) |
+| `POST` | `/api/terminal/:sessionId/focus` | Select the session's tmux window/pane, switch an attached client, raise the terminal app (macOS); in Ghostty, focus the exact window/tab/split (`exact: true`) |
 | `POST` | `/api/terminal/:sessionId/input` | `{ text }` → bracketed paste into the tmux pane, then Enter. Refused if the pane is back at a shell or no longer hosts the recorded CLI pid |
 
 ### Run Agent (`/api/run`)

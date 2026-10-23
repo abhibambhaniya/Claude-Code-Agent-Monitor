@@ -1744,12 +1744,16 @@ export const api = {
   // ──────────────────────────────── Terminal API ──────────────────────────────
   /** Reach a live local session's terminal. Maps to `server/routes/terminal.js`. */
   terminal: {
-    /** POST /api/terminal/:id/focus - select the session's tmux pane and raise its terminal app. */
+    /** POST /api/terminal/:id/focus - select the session's tmux pane and raise its terminal app
+     *  (`exact` when the precise Ghostty window/tab/split was focused). */
     focus: (sessionId: string) =>
-      request<{ ok: boolean; tmux: boolean; attached: boolean; app: string | null }>(
-        `/terminal/${encodeURIComponent(sessionId)}/focus`,
-        { method: "POST" }
-      ),
+      request<{
+        ok: boolean;
+        tmux: boolean;
+        attached: boolean;
+        app: string | null;
+        exact: boolean;
+      }>(`/terminal/${encodeURIComponent(sessionId)}/focus`, { method: "POST" }),
     /** POST /api/terminal/:id/input - type `text` into the session's tmux pane and press Enter. */
     input: (sessionId: string, text: string) =>
       request<{ ok: boolean; sent: boolean }>(`/terminal/${encodeURIComponent(sessionId)}/input`, {
